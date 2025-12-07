@@ -9,7 +9,10 @@ WORKDIR /app
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# app code
 COPY backend /app
+# seed files (CSV/XLSX/images) expected at /files
+COPY files /files
 
 # Default DB path uses env DATABASE_URL; set to volume-backed path when deployed.
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]

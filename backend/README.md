@@ -44,6 +44,7 @@
   - 기본 뷰어(버튼 비활성). 상단 우측 톱니 → 암호 입력 후 편집 모드.
   - 기본 암호: `0690` (변경 시 `static/script.js` 내 비교값 수정). 로컬스토리지 `dashboard-can-edit` 플래그 사용.
 - 그래프: `/currencies/timeseries?weekly=true&weeks=8` 호출. 주간 구간에서 최대값, 없으면 직전 값으로 채움. 타임스탬프 비어 있어도 직전 값으로 이어짐.
+- 시드 파일: `/files` (XLSX/CSV/이미지). 컨테이너 빌드 시 `/files`로 복사하여 자동 시드.
 
 ## Fly.io 배포 가이드(HTTPS, 상시 접근)
 1) 사전 준비: `flyctl` 설치 후 로그인(`fly auth login`), 가까운 리전을 `fly platform regions`로 확인 후 `fly.toml`의 `primary_region` 수정. 앱 이름(`app`)도 원하는 값으로 변경.
