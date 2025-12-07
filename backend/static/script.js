@@ -58,7 +58,9 @@ function renderGallery() {
     } else {
       iconEl.classList.add("hidden");
     }
-    node.querySelector(".card-title").textContent = g.title;
+    const titleEl = node.querySelector(".card-title");
+    titleEl.textContent = g.title;
+    if (g.stop_play) titleEl.classList.add("stopped");
     node.querySelector(".pill").textContent = g.playtime_label;
     node.addEventListener("click", () => selectGame(g.id));
     gallery.appendChild(node);
@@ -66,7 +68,7 @@ function renderGallery() {
 }
 
 async function loadGames() {
-  const games = await fetchJSON("/games?during_play_only=false&include_stopped=false");
+  const games = await fetchJSON("/games?during_play_only=false&include_stopped=true");
   state.games = games;
   renderGallery();
   showView("gallery");

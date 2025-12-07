@@ -416,14 +416,21 @@ def ensure_columns() -> None:
 def seed_games(db: Session) -> Dict[str, Game]:
     path = FILES_DIR / "GameDB.xlsx"
     rows = load_xlsx_rows(path)
+    extra_rows = [
+        {"Title": "엘든링", "StartDate": "2022년 4월 16일", "EndDate": "2024년 7월 14일"},
+        {"Title": "할로우나이트:실크송", "StartDate": "2025년 9월 9일", "EndDate": "2025년 10월 1일"},
+        {"Title": "발더스게이트3", "StartDate": "2024년 8월 10일", "EndDate": "2024년 1월 9일"},
+    ]
     if not rows:
-        return {}
-    headers = rows[0]
-    header_len = len(headers)
+        rows = []
+    else:
+        headers = rows[0]
+        header_len = len(headers)
+        body = rows[1:]
+        rows = [dict(zip(headers, (r + [""] * (header_len - len(r)))[:header_len])) for r in body]
+    rows.extend(extra_rows)
     games: Dict[str, Game] = {}
-    for raw_row in rows[1:]:
-        padded = (raw_row + [""] * (header_len - len(raw_row)))[:header_len]
-        row = dict(zip(headers, padded))
+    for row in rows:
         title = row.get("Title")
         if not title:
             continue
@@ -859,7 +866,7 @@ def weekly_metrics(db: Session = Depends(get_db)):
 @app.get("/games", response_model=List[GameOut])
 def list_games(
     during_play_only: bool = False,
-    include_stopped: bool = False,
+    include_stopped: bool = True,
     db: Session = Depends(get_db),
 ) -> List[Game]:
     query = select(Game)
@@ -869,7 +876,7 @@ def list_games(
         query = query.where(Game.end_date.is_(None))
     result = db.execute(query)
     games = result.scalars().all()
-    games.sort(key=lambda g: g.playtime_days, reverse=True)
+    games.sort(key=lambda g: (g.stop_play, -g.playtime_days))
     for g in games:
         pull_count, pull_msg = compute_gacha_pull(g, db)
         g.gacha_pull_count = pull_count
