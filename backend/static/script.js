@@ -12,6 +12,7 @@ const state = {
     position: "",
   },
   characterOptions: { grades: [], positions: [] },
+  currencies: [],
 };
 
 const IMAGE_FILES = {
@@ -275,6 +276,7 @@ async function loadCurrencies(gameId) {
   const list = el("currency-list");
   list.innerHTML = "로딩 중...";
   const currencies = await fetchJSON(`/games/${gameId}/currencies`);
+  state.currencies = currencies;
   list.innerHTML = "";
   renderCurrencyFilters(currencies);
   loadCurrencyChart(gameId);
@@ -338,29 +340,41 @@ function renderCurrencyFilters(currencies) {
 }
 
 async function loadCurrencyChart(gameId) {
-  const params = new URLSearchParams();
-  if (state.currencyFilter !== "ALL") params.append("title", state.currencyFilter);
-  params.append("weekly", "true");
-  params.append("weeks", "15");
-  params.append("start_date", "2025-11-22");
-  const qs = params.toString() ? `?${params.toString()}` : "";
-  const data = await fetchJSON(`/games/${gameId}/currencies/timeseries${qs}`);
-  drawChart(el("currency-chart"), data.buckets);
+  const base = new URLSearchParams({
+    weekly: "true",
+    weeks: "15",
+    start_date: "2025-11-22",
+  });
+  const titles =
+    state.currencyFilter === "ALL"
+      ? state.currencies.map((c) => c.title)
+      : [state.currencyFilter];
+  const series = await Promise.all(
+    titles.map((title) => {
+      const params = new URLSearchParams(base.toString());
+      params.append("title", title);
+      const qs = `?${params.toString()}`;
+      return fetchJSON(`/games/${gameId}/currencies/timeseries${qs}`);
+    })
+  );
+  drawChart(el("currency-chart"), series);
 }
 
-function drawChart(canvas, buckets) {
+function drawChart(canvas, series) {
   const ctx = canvas.getContext("2d");
   const w = canvas.width = canvas.clientWidth;
   const h = canvas.height = 200;
   ctx.clearRect(0,0,w,h);
-  if (!buckets || buckets.length === 0) return;
-  const valid = buckets.filter((b) => b.count !== null && b.count !== undefined);
+  if (!series || series.length === 0) return;
+  const allBuckets = series.flatMap((s) => s.buckets || []);
+  const valid = allBuckets.filter((b) => b.count !== null && b.count !== undefined);
   if (valid.length === 0) return;
-  const counts = valid.map(b => b.count);
+  const counts = valid.map((b) => b.count);
   const max = Math.max(...counts, 1);
   const min = Math.min(...counts, 0);
   const pad = 24;
-  const stepX = (w - pad * 2) / Math.max(1, buckets.length - 1);
+  const bucketsLen = series[0].buckets.length;
+  const stepX = (w - pad * 2) / Math.max(1, bucketsLen - 1);
   ctx.strokeStyle = "#d1d5db";
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -368,33 +382,36 @@ function drawChart(canvas, buckets) {
   ctx.lineTo(pad, h - pad);
   ctx.lineTo(w - pad, h - pad);
   ctx.stroke();
-  ctx.strokeStyle = "#4338ca";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  const points = [];
-  buckets.forEach((b, i) => {
-    const x = pad + stepX * i;
-    if (b.count === null || b.count === undefined) {
-      points.push({ x, y: null, bucket: b });
-      return;
-    }
-    const norm = (b.count - min) / (max - min || 1);
-    const y = h - pad - norm * (h - pad * 2);
-    points.push({ x, y, bucket: b });
-    const prev = points[points.length - 2];
-    if (!prev || prev.y === null) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
-  ctx.stroke();
-  ctx.fillStyle = "#4338ca";
-  points.forEach((p) => {
-    if (p.y === null) return;
+  const colors = ["#4338ca", "#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"];
+  series.forEach((s, idx) => {
+    const color = colors[idx % colors.length];
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
-    ctx.fill();
+    const points = [];
+    (s.buckets || []).forEach((b, i) => {
+      const x = pad + stepX * i;
+      if (b.count === null || b.count === undefined) {
+        points.push({ x, y: null, bucket: b, title: s.title });
+        return;
+      }
+      const norm = (b.count - min) / (max - min || 1);
+      const y = h - pad - norm * (h - pad * 2);
+      points.push({ x, y, bucket: b, title: s.title });
+      const prev = points[points.length - 2];
+      if (!prev || prev.y === null) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    ctx.fillStyle = color;
+    points.forEach((p) => {
+      if (p.y === null) return;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    attachChartTooltip(canvas, points);
   });
-
-  attachChartTooltip(canvas, points);
 }
 
 function attachChartTooltip(canvas, points) {
