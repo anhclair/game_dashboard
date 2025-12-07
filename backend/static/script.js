@@ -389,18 +389,22 @@ function drawChart(canvas, series) {
     ctx.lineWidth = 2;
     ctx.beginPath();
     const points = [];
+    let lastCount = null;
+    let lastY = null;
     (s.buckets || []).forEach((b, i) => {
       const x = pad + stepX * i;
-      if (b.count === null || b.count === undefined) {
+      const val = b.count === null || b.count === undefined ? lastCount : b.count;
+      if (val === null || val === undefined) {
         points.push({ x, y: null, bucket: b, title: s.title });
         return;
       }
-      const norm = (b.count - min) / (max - min || 1);
+      lastCount = val;
+      const norm = (val - min) / (max - min || 1);
       const y = h - pad - norm * (h - pad * 2);
-      points.push({ x, y, bucket: b, title: s.title });
-      const prev = points[points.length - 2];
-      if (!prev || prev.y === null) ctx.moveTo(x, y);
+      points.push({ x, y, bucket: b, title: s.title, count: val });
+      if (lastY === null) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
+      lastY = y;
     });
     ctx.stroke();
     ctx.fillStyle = color;

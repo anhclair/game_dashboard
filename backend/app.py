@@ -1217,17 +1217,18 @@ def currency_timeseries(
         if start_date:
             buckets: List[CurrencyTimeseriesBucket] = []
             anchor_idx = max(0, weeks - 3)  # place anchor at third from right
+            last_count: Optional[int] = None
             for i in range(weeks):
                 offset = i - anchor_idx
                 week_start = start_date + dt.timedelta(days=7 * offset)
                 week_end = week_start + dt.timedelta(days=6)
-                if week_start > today:
-                    buckets.append(CurrencyTimeseriesBucket(date=week_end, count=None))
-                    continue
-                if week_end < dt.date(1900, 1, 1):
-                    buckets.append(CurrencyTimeseriesBucket(date=week_end, count=None))
-                    continue
-                count = _max_or_latest_in_range(entries, week_start, week_end, title=title)
+                count = None
+                if week_start <= today:
+                    count = _max_or_latest_in_range(entries, week_start, week_end, title=title)
+                if count is None:
+                    count = last_count
+                else:
+                    last_count = count
                 buckets.append(CurrencyTimeseriesBucket(date=week_end, count=count))
             return CurrencyTimeseries(
                 title=title or "ALL",
