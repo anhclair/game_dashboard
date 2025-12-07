@@ -1,13 +1,12 @@
-const CACHE_NAME = "dashboard-cache-v15";
+const CACHE_NAME = "dashboard-cache-v16";
 const ASSETS = [
   "/",
   "/static/index.html",
   "/static/styles.css",
   "/static/script.js",
   "/static/manifest.webmanifest",
-  "/static/icons/app-192.png",
-  "/static/icons/app-512.png",
-  "/static/apple-touch-icon.png"
+  "/static/icons/app-192.jpg",
+  "/static/apple-touch-icon.jpg"
 ];
 
 self.addEventListener("install", (event) => {
