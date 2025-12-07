@@ -83,6 +83,7 @@ function showDetailSkeleton() {
   el("currency-list").innerHTML = "";
   el("event-list").innerHTML = "";
   el("character-list").innerHTML = "";
+  el("gacha-message").textContent = "";
 }
 
 function badgeByRepay(text) {
@@ -134,6 +135,14 @@ async function selectGame(gameId) {
     couponLink.href = game.coupon_url;
   } else {
     couponLink.classList.add("hidden");
+  }
+  const gachaMessage = el("gacha-message");
+  if (game.gacha_pull_message) {
+    gachaMessage.textContent = game.gacha_pull_message;
+    gachaMessage.classList.remove("hidden");
+  } else {
+    gachaMessage.textContent = "";
+    gachaMessage.classList.add("hidden");
   }
 
   await Promise.all([

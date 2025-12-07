@@ -4,7 +4,7 @@ import datetime as dt
 from pathlib import Path
 import zipfile
 import xml.etree.ElementTree as ET
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import FileResponse
@@ -15,6 +15,7 @@ from sqlalchemy import (
     Column,
     Date,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -67,6 +68,25 @@ def parse_int(value: Optional[str], default: Optional[int] = None) -> Optional[i
         return int(text.replace(",", ""))
     except ValueError:
         return default
+
+def parse_float(value: Optional[str], default: Optional[float] = None) -> Optional[float]:
+    if value is None:
+        return default
+    text = str(value).strip()
+    if not text:
+        return default
+    try:
+        return float(text.replace(",", ""))
+    except ValueError:
+        return default
+
+
+def normalize_currency_type(value: Optional[str]) -> str:
+    text = (value or "NONE").strip().strip("`'\"")
+    up = text.upper()
+    if up in {"MAIN", "GACHA", "NONE"}:
+        return up
+    return "NONE"
 
 
 def parse_date_value(value: Optional[str]) -> Optional[dt.date]:
@@ -167,6 +187,42 @@ def read_csv_rows(path: Path) -> List[Dict[str, str]]:
     return rows
 
 
+def load_game_gacha_map() -> Dict[str, int]:
+    path = FILES_DIR / "GameDB.xlsx"
+    rows = load_xlsx_rows(path)
+    if not rows:
+        return {}
+    headers = rows[0]
+    gacha_idx = headers.index("Gacha") if "Gacha" in headers else None
+    title_idx = headers.index("Title") if "Title" in headers else None
+    if gacha_idx is None or title_idx is None:
+        return {}
+    mapping: Dict[str, int] = {}
+    for r in rows[1:]:
+        if len(r) <= max(gacha_idx, title_idx):
+            continue
+        title = r[title_idx]
+        gacha_val = parse_int(r[gacha_idx], default=0) or 0
+        if not title:
+            continue
+        mapping[title] = gacha_val
+    return mapping
+
+
+def load_currency_meta_map() -> Dict[Tuple[str, str], Tuple[str, float]]:
+    rows = read_csv_rows(FILES_DIR / "CurrencyDB.csv")
+    mapping: Dict[Tuple[str, str], Tuple[str, float]] = {}
+    for row in rows:
+        title = row.get("Title")
+        game_title = row.get("GameDB")
+        if not title or not game_title:
+            continue
+        ctype = normalize_currency_type(row.get("Type"))
+        value = parse_float(row.get("Value"), default=1.0) or 1.0
+        mapping[(game_title, title)] = (ctype, value)
+    return mapping
+
+
 class Game(Base):
     __tablename__ = "games"
 
@@ -177,6 +233,7 @@ class Game(Base):
     stop_play = Column(Boolean, default=False, nullable=False)
     uid = Column(String, nullable=True)
     coupon_url = Column(String, nullable=True)
+    gacha = Column(Integer, nullable=True, default=0)
 
     characters = relationship(
         "Character", back_populates="game", cascade="all, delete-orphan"
@@ -228,6 +285,8 @@ class Currency(Base):
     title = Column(String, nullable=False)
     counts = Column(Integer, default=0, nullable=False)
     timestamp = Column(DateTime(timezone=True), nullable=False, default=func.now())
+    type = Column(String, nullable=True)
+    value = Column(Float, nullable=True)
     game_id = Column(Integer, ForeignKey("games.id"), nullable=False, index=True)
 
     game = relationship("Game", back_populates="currencies")
@@ -338,6 +397,8 @@ def ensure_columns() -> None:
             conn.exec_driver_sql("ALTER TABLE games ADD COLUMN uid STRING")
         if "coupon_url" not in cols:
             conn.exec_driver_sql("ALTER TABLE games ADD COLUMN coupon_url STRING")
+        if "gacha" not in cols:
+            conn.exec_driver_sql("ALTER TABLE games ADD COLUMN gacha INTEGER DEFAULT 0")
         ccols = {
             row[1]
             for row in conn.exec_driver_sql("PRAGMA table_info(currencies)").all()
@@ -346,6 +407,10 @@ def ensure_columns() -> None:
             conn.exec_driver_sql(
                 "ALTER TABLE currencies ADD COLUMN timestamp DATETIME"
             )
+        if "type" not in ccols:
+            conn.exec_driver_sql("ALTER TABLE currencies ADD COLUMN type STRING")
+        if "value" not in ccols:
+            conn.exec_driver_sql("ALTER TABLE currencies ADD COLUMN value REAL")
 
 
 def seed_games(db: Session) -> Dict[str, Game]:
@@ -367,6 +432,7 @@ def seed_games(db: Session) -> Dict[str, Game]:
         stop_play = parse_bool(row.get("StopPlay"), default=False)
         uid = row.get("UID") or None
         coupon_url = row.get("CouponURL") or None
+        gacha_cost = parse_int(row.get("Gacha"), default=0) or 0
         if not start_date:
             continue
         if end_date:
@@ -383,6 +449,7 @@ def seed_games(db: Session) -> Dict[str, Game]:
             game.stop_play = stop_play
         game.uid = uid
         game.coupon_url = coupon_url
+        game.gacha = gacha_cost
         games[title] = game
     db.flush()
     return games
@@ -426,9 +493,18 @@ def seed_currencies(db: Session, games: Dict[str, Game]) -> None:
         if not game:
             continue
         counts = parse_int(row.get("Counts"), default=0) or 0
+        ctype = normalize_currency_type(row.get("Type"))
+        value = parse_float(row.get("Value"), default=1) or 1
         ts_date = parse_date_value(row.get("lateDate")) or dt.date.today()
         ts = dt.datetime.combine(ts_date, dt.time.min, dt.timezone.utc)
-        entry = Currency(title=title, game=game, counts=counts, timestamp=ts)
+        entry = Currency(
+            title=title,
+            game=game,
+            counts=counts,
+            timestamp=ts,
+            type=ctype,
+            value=value,
+        )
         db.add(entry)
     db.flush()
 
@@ -504,6 +580,7 @@ def seed_data_from_files() -> None:
             seed_currencies(db, games)
             seed_game_events(db, games)
             seed_spendings(db, games)
+        backfill_seed_defaults(db)
         db.commit()
     finally:
         db.close()
@@ -581,6 +658,9 @@ class GameOut(BaseModel):
     stop_play: bool
     uid: Optional[str]
     coupon_url: Optional[str]
+    gacha: Optional[int]
+    gacha_pull_count: Optional[int] = 0
+    gacha_pull_message: Optional[str] = None
 
     @field_validator("uid", mode="before")
     def coerce_uid(cls, v):
@@ -614,6 +694,8 @@ class CurrencyOut(BaseModel):
     title: str
     counts: int
     timestamp: dt.datetime
+    type: Optional[str]
+    value: Optional[float]
     game_id: int
 
 
@@ -788,6 +870,10 @@ def list_games(
     result = db.execute(query)
     games = result.scalars().all()
     games.sort(key=lambda g: g.playtime_days, reverse=True)
+    for g in games:
+        pull_count, pull_msg = compute_gacha_pull(g, db)
+        g.gacha_pull_count = pull_count
+        g.gacha_pull_message = pull_msg
     return games
 
 
@@ -798,20 +884,7 @@ def get_game_or_404(game_id: int, db: Session) -> Game:
     return game
 
 
-@app.get("/games/{game_id}/characters", response_model=List[CharacterOut])
-def list_characters(game_id: int, db: Session = Depends(get_db)):
-    game = get_game_or_404(game_id, db)
-    result = db.execute(
-        select(Character)
-        .where(Character.game_id == game.id)
-        .order_by(Character.is_have.desc(), Character.title.asc())
-    )
-    return result.scalars().all()
-
-
-@app.get("/games/{game_id}/currencies", response_model=List[CurrencyOut])
-def list_currencies(game_id: int, db: Session = Depends(get_db)):
-    game = get_game_or_404(game_id, db)
+def get_latest_currencies(db: Session, game: Game) -> List[Currency]:
     rows = (
         db.execute(
             select(Currency)
@@ -828,6 +901,76 @@ def list_currencies(game_id: int, db: Session = Depends(get_db)):
     return list(latest_by_title.values())
 
 
+def backfill_seed_defaults(db: Session) -> None:
+    """
+    Safely fills new columns using seed files without overriding user data.
+    - games.gacha: set only when currently 0/None and seed has a positive value.
+    - currencies.type/value: set only when missing/None, using latest entry per title.
+    """
+    if not FILES_DIR.exists():
+        return
+    gacha_map = load_game_gacha_map()
+    if gacha_map:
+        games = db.execute(select(Game)).scalars().all()
+        for game in games:
+            if (game.gacha or 0) == 0:
+                gval = gacha_map.get(game.title)
+                if gval and gval > 0:
+                    game.gacha = gval
+    currency_map = load_currency_meta_map()
+    if currency_map:
+        games = db.execute(select(Game)).scalars().all()
+        for game in games:
+            latest = get_latest_currencies(db, game)
+            for cur in latest:
+                key = (game.title, cur.title)
+                if key not in currency_map:
+                    continue
+                ctype, value = currency_map[key]
+                if not cur.type:
+                    cur.type = ctype
+                if cur.value is None:
+                    cur.value = value
+
+
+def compute_gacha_pull(game: Game, db: Session) -> Tuple[int, str]:
+    if not game.gacha or game.gacha <= 0:
+        return 0, "이 게임은 뽑기가 없는 게임이네요. 재밌게 즐기세요!"
+    currencies = get_latest_currencies(db, game)
+    total_units = 0
+    for cur in currencies:
+        ctype = normalize_currency_type(cur.type)
+        if ctype not in {"MAIN", "GACHA"}:
+            continue
+        value = cur.value if cur.value is not None else 1
+        try:
+            val = float(value)
+        except (TypeError, ValueError):
+            val = 1.0
+        units = int(val * cur.counts)
+        total_units += units
+    pulls = total_units // game.gacha
+    message = f"현재 보유 중인 재화로 {pulls}번 뽑기를 할 수 있어요!"
+    return pulls, message
+
+
+@app.get("/games/{game_id}/characters", response_model=List[CharacterOut])
+def list_characters(game_id: int, db: Session = Depends(get_db)):
+    game = get_game_or_404(game_id, db)
+    result = db.execute(
+        select(Character)
+        .where(Character.game_id == game.id)
+        .order_by(Character.is_have.desc(), Character.title.asc())
+    )
+    return result.scalars().all()
+
+
+@app.get("/games/{game_id}/currencies", response_model=List[CurrencyOut])
+def list_currencies(game_id: int, db: Session = Depends(get_db)):
+    game = get_game_or_404(game_id, db)
+    return get_latest_currencies(db, game)
+
+
 @app.post("/currencies/{currency_id}/adjust", response_model=CurrencyOut)
 def adjust_currency(
     currency_id: int, payload: CurrencyAdjust, db: Session = Depends(get_db)
@@ -840,6 +983,8 @@ def adjust_currency(
         game=currency.game,
         counts=payload.counts,
         timestamp=dt.datetime.now(dt.timezone.utc),
+        type=currency.type,
+        value=currency.value,
     )
     db.add(new_entry)
     db.commit()
