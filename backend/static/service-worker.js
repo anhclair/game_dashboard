@@ -1,4 +1,4 @@
-const CACHE_NAME = "dashboard-cache-v6";
+const CACHE_NAME = "dashboard-cache-v7";
 const ASSETS = [
   "/",
   "/static/index.html",
@@ -29,6 +29,14 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const { request } = event;
   if (request.method !== "GET") return;
+  const url = new URL(request.url);
+  const isSameOrigin = url.origin === self.location.origin;
+  const isStatic =
+    isSameOrigin &&
+    (ASSETS.includes(url.pathname) ||
+      url.pathname.startsWith("/static/") ||
+      url.pathname.startsWith("/assets/"));
+  if (!isStatic) return;
   event.respondWith(
     caches.match(request).then((cached) => {
       if (cached) return cached;
