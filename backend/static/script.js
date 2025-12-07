@@ -354,7 +354,9 @@ function drawChart(canvas, buckets) {
   const h = canvas.height = 200;
   ctx.clearRect(0,0,w,h);
   if (!buckets || buckets.length === 0) return;
-  const counts = buckets.map(b => b.count);
+  const valid = buckets.filter((b) => b.count !== null && b.count !== undefined);
+  if (valid.length === 0) return;
+  const counts = valid.map(b => b.count);
   const max = Math.max(...counts, 1);
   const min = Math.min(...counts, 0);
   const pad = 24;
@@ -372,15 +374,21 @@ function drawChart(canvas, buckets) {
   const points = [];
   buckets.forEach((b, i) => {
     const x = pad + stepX * i;
+    if (b.count === null || b.count === undefined) {
+      points.push({ x, y: null, bucket: b });
+      return;
+    }
     const norm = (b.count - min) / (max - min || 1);
     const y = h - pad - norm * (h - pad * 2);
     points.push({ x, y, bucket: b });
-    if (i === 0) ctx.moveTo(x, y);
+    const prev = points[points.length - 2];
+    if (!prev || prev.y === null) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   });
   ctx.stroke();
   ctx.fillStyle = "#4338ca";
   points.forEach((p) => {
+    if (p.y === null) return;
     ctx.beginPath();
     ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
     ctx.fill();

@@ -671,7 +671,7 @@ class WeeklyMetrics(BaseModel):
 
 class CurrencyTimeseriesBucket(BaseModel):
     date: dt.date
-    count: int
+    count: Optional[int]
 
 
 class CurrencyTimeseries(BaseModel):
@@ -1216,12 +1216,19 @@ def currency_timeseries(
         weeks = max(1, min(weeks, 15))
         if start_date:
             buckets: List[CurrencyTimeseriesBucket] = []
-            cur_start = start_date
-            for _ in range(weeks):
-                week_end = cur_start + dt.timedelta(days=6)
-                count = _max_or_latest_in_range(entries, cur_start, week_end, title=title)
+            anchor_idx = max(0, weeks - 3)  # place anchor at third from right
+            for i in range(weeks):
+                offset = i - anchor_idx
+                week_start = start_date + dt.timedelta(days=7 * offset)
+                week_end = week_start + dt.timedelta(days=6)
+                if week_start > today:
+                    buckets.append(CurrencyTimeseriesBucket(date=week_end, count=None))
+                    continue
+                if week_end < dt.date(1900, 1, 1):
+                    buckets.append(CurrencyTimeseriesBucket(date=week_end, count=None))
+                    continue
+                count = _max_or_latest_in_range(entries, week_start, week_end, title=title)
                 buckets.append(CurrencyTimeseriesBucket(date=week_end, count=count))
-                cur_start += dt.timedelta(days=7)
             return CurrencyTimeseries(
                 title=title or "ALL",
                 buckets=buckets,
