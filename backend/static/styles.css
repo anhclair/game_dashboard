@@ -214,6 +214,22 @@ a:hover { text-decoration: underline; }
   color: #1e3a8a;
   font-size: 13px;
 }
+.memo-toggle { margin-top: 6px; }
+.memo-box {
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  color: #1f2937;
+  white-space: pre-wrap;
+}
+.memo-toggle .ghost { padding: 6px 10px; }
+.memo-box textarea {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 6px 0;
+}
 
 .list { display: flex; flex-direction: column; gap: 8px; }
 .list-item {
@@ -236,6 +252,12 @@ a:hover { text-decoration: underline; }
 .inline-check { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
 .small-btn { padding: 6px 10px; white-space: nowrap; }
 .row input { flex: 1; }
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
 
 input, button {
   font: inherit;

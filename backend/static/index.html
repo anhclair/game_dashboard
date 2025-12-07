@@ -45,6 +45,14 @@
             </div>
             <div class="info-grid" id="game-info"></div>
             <p id="gacha-message" class="gacha-message"></p>
+            <div id="memo-toggle" class="memo-toggle hidden">
+              <button id="btn-memo-toggle" class="ghost">메모 보기</button>
+              <div id="memo-box" class="memo-box hidden">
+                <div id="memo-display"></div>
+                <textarea id="memo-input" rows="3" placeholder="메모를 입력하세요"></textarea>
+                <button id="btn-memo-save" class="small-btn">메모 저장</button>
+              </div>
+            </div>
           </div>
 
           <div class="section" id="spending-section">
@@ -90,6 +98,13 @@
           <div class="section">
             <div class="section-header">
               <h3>캐릭터</h3>
+            </div>
+            <div id="character-filters" class="filter-row">
+              <input type="number" id="filter-level" placeholder="레벨 이상">
+              <input type="number" id="filter-overpower" placeholder="돌파 이상">
+              <select id="filter-grade"><option value="">등급 전체</option></select>
+              <select id="filter-position"><option value="">포지션 전체</option></select>
+              <button id="filter-reset" class="ghost small-btn">초기화</button>
             </div>
             <div id="character-list" class="list"></div>
           </div>

@@ -209,6 +209,29 @@ def load_game_gacha_map() -> Dict[str, int]:
     return mapping
 
 
+def load_game_memo_map() -> Dict[str, str]:
+    path = FILES_DIR / "GameDB.xlsx"
+    rows = load_xlsx_rows(path)
+    if not rows:
+        return {}
+    headers = rows[0]
+    memo_idx = headers.index("Memo") if "Memo" in headers else None
+    title_idx = headers.index("Title") if "Title" in headers else None
+    if memo_idx is None or title_idx is None:
+        return {}
+    mapping: Dict[str, str] = {}
+    for r in rows[1:]:
+        if len(r) <= max(memo_idx, title_idx):
+            continue
+        title = r[title_idx]
+        memo = r[memo_idx]
+        if not title:
+            continue
+        if memo:
+            mapping[title] = memo
+    return mapping
+
+
 def load_currency_meta_map() -> Dict[Tuple[str, str], Tuple[str, float]]:
     rows = read_csv_rows(FILES_DIR / "CurrencyDB.csv")
     mapping: Dict[Tuple[str, str], Tuple[str, float]] = {}
@@ -234,6 +257,7 @@ class Game(Base):
     uid = Column(String, nullable=True)
     coupon_url = Column(String, nullable=True)
     gacha = Column(Integer, nullable=True, default=0)
+    memo = Column(String, nullable=True)
 
     characters = relationship(
         "Character", back_populates="game", cascade="all, delete-orphan"
@@ -254,7 +278,8 @@ class Game(Base):
 
     @property
     def playtime_days(self) -> int:
-        days = (dt.date.today() - self.start_date).days + 1
+        end_ref = self.end_date or dt.date.today()
+        days = (end_ref - self.start_date).days
         return max(days, 0)
 
     @property
@@ -399,6 +424,8 @@ def ensure_columns() -> None:
             conn.exec_driver_sql("ALTER TABLE games ADD COLUMN coupon_url STRING")
         if "gacha" not in cols:
             conn.exec_driver_sql("ALTER TABLE games ADD COLUMN gacha INTEGER DEFAULT 0")
+        if "memo" not in cols:
+            conn.exec_driver_sql("ALTER TABLE games ADD COLUMN memo STRING")
         ccols = {
             row[1]
             for row in conn.exec_driver_sql("PRAGMA table_info(currencies)").all()
@@ -440,6 +467,7 @@ def seed_games(db: Session) -> Dict[str, Game]:
         uid = row.get("UID") or None
         coupon_url = row.get("CouponURL") or None
         gacha_cost = parse_int(row.get("Gacha"), default=0) or 0
+        memo = row.get("Memo") or None
         if not start_date:
             continue
         if end_date:
@@ -455,9 +483,10 @@ def seed_games(db: Session) -> Dict[str, Game]:
             game.end_date = end_date
             game.stop_play = stop_play
         game.uid = uid
-        game.coupon_url = coupon_url
-        game.gacha = gacha_cost
-        games[title] = game
+    game.coupon_url = coupon_url
+    game.gacha = gacha_cost
+    game.memo = memo
+    games[title] = game
     db.flush()
     return games
 
@@ -668,6 +697,7 @@ class GameOut(BaseModel):
     gacha: Optional[int]
     gacha_pull_count: Optional[int] = 0
     gacha_pull_message: Optional[str] = None
+    memo: Optional[str]
 
     @field_validator("uid", mode="before")
     def coerce_uid(cls, v):
@@ -692,6 +722,10 @@ class CharacterOut(BaseModel):
     memo: Optional[str]
     is_have: bool
     game_id: int
+
+
+class GameMemoUpdate(BaseModel):
+    memo: Optional[str] = None
 
 
 class CurrencyOut(BaseModel):
@@ -912,21 +946,26 @@ def backfill_seed_defaults(db: Session) -> None:
     """
     Safely fills new columns using seed files without overriding user data.
     - games.gacha: set only when currently 0/None and seed has a positive value.
+    - games.memo: set only when missing and seed has a memo value.
     - currencies.type/value: set only when missing/None, using latest entry per title.
     """
     if not FILES_DIR.exists():
         return
+    games = db.execute(select(Game)).scalars().all()
     gacha_map = load_game_gacha_map()
-    if gacha_map:
-        games = db.execute(select(Game)).scalars().all()
+    memo_map = load_game_memo_map()
+    if gacha_map or memo_map:
         for game in games:
-            if (game.gacha or 0) == 0:
+            if (game.gacha or 0) == 0 and gacha_map:
                 gval = gacha_map.get(game.title)
                 if gval and gval > 0:
                     game.gacha = gval
+            if (not game.memo) and memo_map:
+                m = memo_map.get(game.title)
+                if m:
+                    game.memo = m
     currency_map = load_currency_meta_map()
     if currency_map:
-        games = db.execute(select(Game)).scalars().all()
         for game in games:
             latest = get_latest_currencies(db, game)
             for cur in latest:
@@ -1071,6 +1110,20 @@ def create_game_event(
     return event
 
 
+@app.post("/games/{game_id}/memo", response_model=GameOut)
+def update_game_memo(
+    game_id: int, payload: GameMemoUpdate, db: Session = Depends(get_db)
+):
+    game = get_game_or_404(game_id, db)
+    game.memo = payload.memo or None
+    db.commit()
+    db.refresh(game)
+    pull_count, pull_msg = compute_gacha_pull(game, db)
+    game.gacha_pull_count = pull_count
+    game.gacha_pull_message = pull_msg
+    return game
+
+
 @app.post("/characters/{character_id}/update", response_model=CharacterOut)
 def update_character(
     character_id: int, payload: CharacterUpdate, db: Session = Depends(get_db)
@@ -1159,20 +1212,22 @@ def currency_timeseries(
     )
     today = dt.date.today()
 
-    if start_date:
-        start_date = min(start_date, today)
-        buckets: List[CurrencyTimeseriesBucket] = []
-        cur = start_date
-        while cur <= today:
-            count = _latest_count_on_or_before(entries, cur, title=title)
-            buckets.append(CurrencyTimeseriesBucket(date=cur, count=count))
-            cur += dt.timedelta(days=1)
-        return CurrencyTimeseries(
-            title=title or "ALL", buckets=buckets, from_date=start_date, to_date=today
-        )
-
     if weekly:
-        weeks = max(1, min(weeks, 26))
+        weeks = max(1, min(weeks, 15))
+        if start_date:
+            buckets: List[CurrencyTimeseriesBucket] = []
+            cur_start = start_date
+            for _ in range(weeks):
+                week_end = cur_start + dt.timedelta(days=6)
+                count = _max_or_latest_in_range(entries, cur_start, week_end, title=title)
+                buckets.append(CurrencyTimeseriesBucket(date=week_end, count=count))
+                cur_start += dt.timedelta(days=7)
+            return CurrencyTimeseries(
+                title=title or "ALL",
+                buckets=buckets,
+                from_date=buckets[0].date,
+                to_date=buckets[-1].date,
+            )
         delta = (today.weekday() + 1) % 7  # days since last Sunday
         current_week_start = today - dt.timedelta(days=delta)
         buckets: List[CurrencyTimeseriesBucket] = []

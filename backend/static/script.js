@@ -4,6 +4,14 @@ const state = {
   currencyFilter: "ALL",
   view: "gallery",
   canEdit: false,
+  characters: [],
+  characterFilter: {
+    level: "",
+    grade: "",
+    overpower: "",
+    position: "",
+  },
+  characterOptions: { grades: [], positions: [] },
 };
 
 const IMAGE_FILES = {
@@ -94,11 +102,32 @@ function badgeByRepay(text) {
   return "good";
 }
 
+function gradeScore(val) {
+  if (val == null) return 0;
+  const digits = String(val).match(/\d+/);
+  if (digits) return parseInt(digits[0], 10);
+  const stars = (String(val).match(/[★*]/g) || []).length;
+  if (stars > 0) return stars;
+  return 0;
+}
+
+function sortCharacters(list) {
+  return [...list].sort((a, b) => {
+    const gDiff = gradeScore(b.grade) - gradeScore(a.grade);
+    if (gDiff) return gDiff;
+    const oDiff = (b.overpower ?? 0) - (a.overpower ?? 0);
+    if (oDiff) return oDiff;
+    return (b.level ?? 0) - (a.level ?? 0);
+  });
+}
+
 async function selectGame(gameId) {
   const game = state.games.find((g) => g.id === gameId);
   if (!game) return;
   state.selected = game;
-   state.currencyFilter = "ALL";
+  state.currencyFilter = "ALL";
+  state.characterFilter = { level: "", grade: "", overpower: "", position: "" };
+  state.characters = [];
   showView("detail");
   showDetailSkeleton();
 
@@ -146,6 +175,43 @@ async function selectGame(gameId) {
     gachaMessage.textContent = "";
     gachaMessage.classList.add("hidden");
   }
+  const memoToggle = el("memo-toggle");
+  const memoBox = el("memo-box");
+  const memoBtn = el("btn-memo-toggle");
+  const memoDisplay = el("memo-display");
+  const memoInput = el("memo-input");
+  const memoSave = el("btn-memo-save");
+  if (game.memo) {
+    memoDisplay.textContent = game.memo;
+  } else {
+    memoDisplay.textContent = "메모가 없습니다.";
+  }
+  memoInput.value = game.memo || "";
+  memoBox.classList.add("hidden");
+  memoBtn.textContent = "메모 보기";
+  memoBtn.onclick = () => {
+    const hidden = memoBox.classList.toggle("hidden");
+    memoBtn.textContent = hidden ? "메모 보기" : "메모 닫기";
+  };
+  memoToggle.classList.remove("hidden");
+
+  memoSave.onclick = async () => {
+    if (!state.canEdit) {
+      alert("뷰어 권한입니다.");
+      return;
+    }
+    try {
+      const updated = await fetchJSON(`/games/${game.id}/memo`, {
+        method: "POST",
+        body: JSON.stringify({ memo: memoInput.value }),
+      });
+      state.selected.memo = updated.memo;
+      memoDisplay.textContent = updated.memo || "메모가 없습니다.";
+      alert("메모가 저장되었습니다.");
+    } catch {
+      alert("메모 저장에 실패했습니다.");
+    }
+  };
 
   // 던파 모바일은 결제/재화/그래프 숨김
   const hideEconomy = game.title === "던파 모바일";
@@ -274,7 +340,9 @@ function renderCurrencyFilters(currencies) {
 async function loadCurrencyChart(gameId) {
   const params = new URLSearchParams();
   if (state.currencyFilter !== "ALL") params.append("title", state.currencyFilter);
-  params.append("start_date", "2023-11-22");
+  params.append("weekly", "true");
+  params.append("weeks", "15");
+  params.append("start_date", "2025-11-22");
   const qs = params.toString() ? `?${params.toString()}` : "";
   const data = await fetchJSON(`/games/${gameId}/currencies/timeseries${qs}`);
   drawChart(el("currency-chart"), data.buckets);
@@ -387,11 +455,46 @@ async function loadCharacters(gameId) {
   const list = el("character-list");
   list.innerHTML = "로딩 중...";
   const chars = await fetchJSON(`/games/${gameId}/characters`);
+  state.characters = chars;
+  const gradeOptions = [...new Set(chars.map((c) => c.grade).filter(Boolean))];
+  const positions = [...new Set(chars.map((c) => c.position).filter(Boolean))];
+  state.characterOptions = { grades: gradeOptions, positions };
+  renderCharacterFilters(gradeOptions, positions);
+  renderCharacters();
+}
+
+function applyCharacterFilters(list) {
+  return list.filter((c) => {
+    const { level, grade, overpower, position } = state.characterFilter;
+    if (level && (c.level ?? 0) < Number(level)) return false;
+    if (overpower && (c.overpower ?? 0) < Number(overpower)) return false;
+    if (grade && c.grade !== grade) return false;
+    if (position && c.position !== position) return false;
+    return true;
+  });
+}
+
+function renderCharacterFilters(grades, positions) {
+  const gradeSelect = el("filter-grade");
+  const posSelect = el("filter-position");
+  gradeSelect.innerHTML =
+    `<option value="">등급 전체</option>` +
+    grades.map((g) => `<option value="${g}">${g}</option>`).join("");
+  posSelect.innerHTML =
+    `<option value="">포지션 전체</option>` +
+    positions.map((p) => `<option value="${p}">${p}</option>`).join("");
+  gradeSelect.value = state.characterFilter.grade || "";
+  posSelect.value = state.characterFilter.position || "";
+  el("filter-level").value = state.characterFilter.level || "";
+  el("filter-overpower").value = state.characterFilter.overpower || "";
+}
+
+function renderCharacters() {
+  const list = el("character-list");
   list.innerHTML = "";
-  const gradeOptions = Array.from(
-    new Set(chars.map((c) => c.grade).filter(Boolean))
-  );
-  chars.forEach((ch) => {
+  const chars = applyCharacterFilters(state.characters);
+  const sorted = sortCharacters(chars);
+  sorted.forEach((ch) => {
     const item = document.createElement("div");
     item.className = "list-item";
     item.innerHTML = `
@@ -411,7 +514,9 @@ async function loadCharacters(gameId) {
     const haveInput = item.querySelector('input[type="checkbox"]');
 
     // grade select options
-    const grades = [...new Set([ch.grade, ...gradeOptions].filter(Boolean))];
+    const grades = [
+      ...new Set([ch.grade, ...state.characterOptions.grades].filter(Boolean)),
+    ];
     gradeSelect.innerHTML =
       `<option value="">등급 선택</option>` +
       grades.map((g) => `<option value="${g}" ${g === ch.grade ? "selected" : ""}>${g}</option>`).join("");
@@ -502,6 +607,32 @@ function wireActions() {
       alert("이벤트 추가 실패");
     }
   });
+
+  const lvlFilter = el("filter-level");
+  const gradeFilter = el("filter-grade");
+  const opFilter = el("filter-overpower");
+  const posFilter = el("filter-position");
+  const resetFilter = el("filter-reset");
+  const applyFilters = () => {
+    state.characterFilter = {
+      level: lvlFilter.value,
+      grade: gradeFilter.value,
+      overpower: opFilter.value,
+      position: posFilter.value,
+    };
+    renderCharacters();
+  };
+  [lvlFilter, gradeFilter, opFilter, posFilter].forEach((elmt) => {
+    elmt.addEventListener("input", applyFilters);
+    elmt.addEventListener("change", applyFilters);
+  });
+  resetFilter.addEventListener("click", () => {
+    lvlFilter.value = "";
+    gradeFilter.value = "";
+    opFilter.value = "";
+    posFilter.value = "";
+    applyFilters();
+  });
 }
 
 async function init() {
@@ -591,4 +722,11 @@ function applyEditState() {
       btn.classList.add("disabled-btn");
     }
   });
+  const memoInput = el("memo-input");
+  const memoSave = el("btn-memo-save");
+  if (memoInput) memoInput.disabled = !state.canEdit;
+  if (memoSave) {
+    memoSave.disabled = !state.canEdit;
+    memoSave.classList.toggle("disabled-btn", !state.canEdit);
+  }
 }
