@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Game Dashboard</title>
+  <meta name="theme-color" content="#4338ca">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="topbar-left">
+        <button id="btn-back-main" class="ghost back-btn hidden">메인 대시보드로</button>
+        <h1>나의 게임 대시보드</h1>
+      </div>
+      <div class="topbar-right">
+        <span id="auth-chip" class="pill small muted">뷰어</span>
+        <button id="btn-settings" class="icon-btn" aria-label="권한 설정">⚙</button>
+        <div id="settings-panel" class="settings-panel hidden">
+          <input type="password" id="input-pass" placeholder="암호">
+          <button id="btn-apply-pass">확인</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="gallery" id="gallery" aria-label="게임 목록"></section>
+      <section class="detail hidden" id="detail" aria-label="게임 상세">
+        <div id="detail-empty" class="placeholder">게임을 선택하세요</div>
+        <div id="detail-content" class="hidden">
+          <div class="detail-header">
+            <div>
+              <p class="pill" id="detail-playtime"></p>
+              <div class="title-row">
+                <img id="detail-icon" class="game-icon hidden" alt="">
+                <h2 id="detail-title"></h2>
+              </div>
+              <p class="meta" id="detail-dates"></p>
+            </div>
+            <button id="btn-end-game" class="ghost">이제 이 게임 안 해요</button>
+          </div>
+
+          <div class="section">
+            <div class="section-header">
+              <h3>현재 게임 정보</h3>
+              <a id="detail-coupon" href="#" target="_blank" class="link hidden">쿠폰 바로가기</a>
+            </div>
+            <div class="info-grid" id="game-info"></div>
+          </div>
+
+          <div class="section">
+            <div class="section-header">
+              <h3>월정액 관리</h3>
+            </div>
+            <div id="spending-list" class="list"></div>
+          </div>
+
+          <div class="section">
+            <div class="section-header">
+              <h3>재화 관리</h3>
+            </div>
+            <div class="graph-card">
+              <div class="graph-header">
+                <h4>재화 사용 그래프</h4>
+                <div class="chip-row" id="currency-filters"></div>
+              </div>
+              <canvas id="currency-chart" height="180"></canvas>
+            </div>
+            <div id="currency-list" class="list"></div>
+          </div>
+
+          <div class="section">
+            <div class="section-header">
+              <h3>이벤트</h3>
+            </div>
+            <form id="event-form" class="stack">
+              <div class="row">
+                <input required name="title" placeholder="이벤트명">
+                <input required name="type" placeholder="분류(업데이트/스토리/픽업)">
+              </div>
+              <div class="row">
+                <input required type="date" name="start_date">
+                <input type="date" name="end_date">
+                <input required name="priority" placeholder="중요도">
+              </div>
+              <button type="submit">이벤트 추가</button>
+            </form>
+            <div id="event-list" class="list"></div>
+          </div>
+
+          <div class="section">
+            <div class="section-header">
+              <h3>캐릭터</h3>
+            </div>
+            <div id="character-list" class="list"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <template id="game-card-template">
+    <article class="card">
+      <div class="thumb"></div>
+      <div class="card-body">
+        <div class="card-title-row">
+          <img class="game-icon small hidden" alt="">
+          <h4 class="card-title"></h4>
+        </div>
+        <p class="pill small"></p>
+      </div>
+    </article>
+  </template>
+
+  <script src="/static/script.js"></script>
+</body>
+</html>
