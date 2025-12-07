@@ -10,11 +10,13 @@
   - 버튼 로그: `items`, `events`
 - 데이터 위치: `../files/GameDB.xlsx`, `CharacterDB.csv`, `CurrencyDB.csv`, `EventDB.csv`, `SpendingDB.csv`
 - 핵심 계산 규칙
-  - Game: `playtime = 오늘 - StartDate + 1 (일 단위)`, `during_play = EndDate 없음`, `stop_play=True`이면 메인 목록에서 제외
+  - Game: `playtime = (EndDate 있으면 EndDate, 없으면 오늘) - StartDate`, `during_play = EndDate 없음`, `stop_play=True`라도 메인 목록에 표시(취소선/후순위)
   - Currency: `timestamp`는 서버 타임으로 기록, `/currencies/{id}/adjust` 호출 시 **새 행 추가** 후 최신 `timestamp` 기준으로 표시
   - Event: `state`는 StartDate/EndDate와 서버 타임으로 `예정/진행 중/종료` 계산
   - Spending: `next_paying_date = paying_date + expiration_days`, `remain_date = next_paying_date - 오늘`, `is_repaying`은 3/7/15일 임계값으로 `갱신필요/유의/여유`
-  - GameDB 컬럼 확장: `UID`, `CouponURL`
+  - GameDB 컬럼 확장: `UID`, `CouponURL`, `Gacha`, `Memo`
+  - CurrencyDB 컬럼 확장: `Type`(`Main/Gacha/NONE`), `Value`(배율)
+  - Gacha 계산: `Main` + `Gacha`(배율 적용, 소수점 버림) 합산 후 GameDB.Gacha로 나눠 횟수 산출. 메시지로 표시.
 
 ## 엔드포인트
 - `GET /health` 서버 상태 확인
@@ -34,17 +36,22 @@
 - `GET /games/{game_id}/spendings` 정기 결제/패스 목록 + `next_paying_date`, `remain_date`, `is_repaying`
 - `POST /spendings/{spending_id}/renew` 결제일 갱신 `{paying_date?, expiration_days?, paying?}`
 - `POST /characters/{character_id}/update` 레벨/등급/돌파/보유 업데이트
+- `POST /games/{game_id}/memo` 게임 메모 저장 `{memo}` (편집 모드에서 UI로 호출)
+- `GET /games/{game_id}/currencies/timeseries` 주간 그래프: `weekly=true&weeks=15&start_date=2025-11-22` 사용
 
 ## 프런트엔드(PWA) 메모
 - 정적 파일: `backend/static` (`index.html`, `styles.css`, `script.js`)
-- PWA: `manifest.webmanifest`, `service-worker.js` 등록, `/assets`로 이미지 마운트. 아이콘은 `static/icons/*`, `apple-touch-icon.png`.
+- PWA: `manifest.webmanifest`, `service-worker.js` 등록, `/assets`로 이미지 마운트. 아이콘은 `static/icons/app-192.jpg`, `apple-touch-icon.jpg`.
 - 대시보드 레이아웃: 메인 갤러리(4열, 2.5행 높이 스크롤) → 카드 클릭 시 전체 화면 상세, 상단 왼쪽에 메인으로 돌아가기 버튼.
 - 이미지 매핑: `files/image/<GAME_DIR>/{icon,profile}` 사용. JS `IMAGE_FILES` 매핑 참고.
 - 권한 모드:
-  - 기본 뷰어(버튼 비활성). 상단 우측 톱니 → 암호 입력 후 편집 모드.
+  - 기본 뷰어(버튼 비활성). 상단 우측 pill(뷰어/편집) 클릭 → 암호 입력(0690) 후 편집 모드 토글.
   - 기본 암호: `0690` (변경 시 `static/script.js` 내 비교값 수정). 로컬스토리지 `dashboard-can-edit` 플래그 사용.
-- 그래프: `/currencies/timeseries?weekly=true&weeks=8` 호출. 주간 구간에서 최대값, 없으면 직전 값으로 채움. 타임스탬프 비어 있어도 직전 값으로 이어짐.
+- 그래프: `/currencies/timeseries?weekly=true&weeks=15&start_date=2025-11-22` 호출. 15주 점, 주간 최대값 기준. 타임스탬프 비어 있어도 직전 값으로 이어짐.
 - 시드 파일: `/files` (XLSX/CSV/이미지). 컨테이너 빌드 시 `/files`로 복사하여 자동 시드.
+- 게임별 시드 추가: 엘든링, 할로우나이트:실크송, 발더스게이트3 (StopPlay 처리됨).
+- 캐릭터 리스트 정렬: 등급(숫자/별) > 돌파 > 레벨 내림차순. 필터(레벨/돌파/등급/포지션) 지원.
+- 메모: 가챠 메시지 아래 토글로 열고 편집 모드에서 저장.
 
 ## Fly.io 배포 가이드(HTTPS, 상시 접근)
 1) 사전 준비: `flyctl` 설치 후 로그인(`fly auth login`), 가까운 리전을 `fly platform regions`로 확인 후 `fly.toml`의 `primary_region` 수정. 앱 이름(`app`)도 원하는 값으로 변경.
