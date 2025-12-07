@@ -1,4 +1,5 @@
 import csv
+import os
 import datetime as dt
 from pathlib import Path
 import zipfile
@@ -25,7 +26,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 
 
-DATABASE_URL = "sqlite:///./data.db"
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data.db")
 FILES_DIR = Path(__file__).resolve().parent.parent / "files"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 EXCEL_EPOCH = dt.date(1899, 12, 30)

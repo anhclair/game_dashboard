@@ -45,6 +45,18 @@
   - 기본 암호: `0690` (변경 시 `static/script.js` 내 비교값 수정). 로컬스토리지 `dashboard-can-edit` 플래그 사용.
 - 그래프: `/currencies/timeseries?weekly=true&weeks=8` 호출. 주간 구간에서 최대값, 없으면 직전 값으로 채움. 타임스탬프 비어 있어도 직전 값으로 이어짐.
 
+## Fly.io 배포 가이드(HTTPS, 상시 접근)
+1) 사전 준비: `flyctl` 설치 후 로그인(`fly auth login`), 가까운 리전을 `fly regions list`로 확인 후 `fly.toml`의 `primary_region` 수정. 앱 이름(`app`)도 원하는 값으로 변경.
+2) 볼륨 생성(데이터 보존): `fly volumes create datavol --size 1 --region <리전>`  
+   - DB 경로는 `DATABASE_URL=sqlite:////data/data.db`로 `/data` 볼륨에 저장.
+3) 배포:
+   ```bash
+   flyctl deploy --remote-only
+   ```
+   기본 도커파일(Dockerfile)로 uvicorn을 8080 포트에서 실행, HTTPS는 자동 적용.
+4) 접속: `https://<app>.fly.dev/` (도메인 연결 시 CNAME만 설정하면 됨). PWA는 상대 경로라 같은 도메인에서 바로 동작.
+5) 백업/재배포 시 볼륨 유지: 동일 리전/볼륨 이름을 사용하면 `data.db`가 그대로 남음.
+
 ## 로컬 실행 (Linux 기준)
 ```bash
 cd backend
