@@ -264,8 +264,7 @@ function renderCurrencyFilters(currencies) {
 async function loadCurrencyChart(gameId) {
   const params = new URLSearchParams();
   if (state.currencyFilter !== "ALL") params.append("title", state.currencyFilter);
-  params.append("weekly", "true");
-  params.append("weeks", "8");
+  params.append("start_date", "2024-11-22");
   const qs = params.toString() ? `?${params.toString()}` : "";
   const data = await fetchJSON(`/games/${gameId}/currencies/timeseries${qs}`);
   drawChart(el("currency-chart"), data.buckets);
@@ -388,17 +387,15 @@ async function loadCharacters(gameId) {
     item.innerHTML = `
       <h4>${ch.title}</h4>
       <p class="meta">Lv ${ch.level ?? "-"} • ${ch.grade ?? "-"} • 돌파 ${ch.overpower ?? 0} • ${ch.position ?? "-"}</p>
-      <div class="row">
-        <input type="number" value="${ch.level ?? 0}" placeholder="레벨">
+      <div class="row compact">
+        <input class="level-input" type="number" value="${ch.level ?? 0}" placeholder="레벨">
         <select class="grade"></select>
-      </div>
-      <div class="row">
         <select class="overpower"></select>
-        <label><input type="checkbox" ${ch.is_have ? "checked" : ""}> 보유</label>
-        <button>변경</button>
+        <label class="inline-check"><input type="checkbox" ${ch.is_have ? "checked" : ""}> 보유</label>
+        <button class="small-btn">변경</button>
       </div>
     `;
-    const levelInput = item.querySelectorAll(".row:first-child input")[0];
+    const levelInput = item.querySelector(".level-input");
     const gradeSelect = item.querySelector("select.grade");
     const overpowerSelect = item.querySelector("select.overpower");
     const haveInput = item.querySelector('input[type="checkbox"]');

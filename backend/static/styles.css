@@ -227,6 +227,10 @@ a:hover { text-decoration: underline; }
   font-size: 12px;
 }
 .row { display: flex; gap: 8px; }
+.row.compact { flex-wrap: wrap; align-items: center; gap: 6px; }
+.level-input { max-width: 90px; flex: 0 0 auto; }
+.inline-check { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.small-btn { padding: 6px 10px; white-space: nowrap; }
 .row input { flex: 1; }
 
 input, button {

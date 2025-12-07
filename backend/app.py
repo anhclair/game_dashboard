@@ -1137,6 +1137,7 @@ def currency_timeseries(
     days: int = 7,
     weekly: bool = False,
     weeks: int = 8,
+    start_date: Optional[dt.date] = None,
     db: Session = Depends(get_db),
 ):
     game = get_game_or_404(game_id, db)
@@ -1149,9 +1150,22 @@ def currency_timeseries(
         .scalars()
         .all()
     )
+    today = dt.date.today()
+
+    if start_date:
+        start_date = min(start_date, today)
+        buckets: List[CurrencyTimeseriesBucket] = []
+        cur = start_date
+        while cur <= today:
+            count = _latest_count_on_or_before(entries, cur, title=title)
+            buckets.append(CurrencyTimeseriesBucket(date=cur, count=count))
+            cur += dt.timedelta(days=1)
+        return CurrencyTimeseries(
+            title=title or "ALL", buckets=buckets, from_date=start_date, to_date=today
+        )
+
     if weekly:
         weeks = max(1, min(weeks, 26))
-        today = dt.date.today()
         delta = (today.weekday() + 1) % 7  # days since last Sunday
         current_week_start = today - dt.timedelta(days=delta)
         buckets: List[CurrencyTimeseriesBucket] = []
@@ -1168,7 +1182,6 @@ def currency_timeseries(
         )
 
     days = max(1, min(days, 30))
-    today = dt.date.today()
     start = today - dt.timedelta(days=days - 1)
     buckets: List[CurrencyTimeseriesBucket] = []
     for i in range(days):
