@@ -13,16 +13,11 @@
   <div id="app">
     <header class="topbar">
       <div class="topbar-left">
-        <button id="btn-back-main" class="ghost back-btn hidden">메인 대시보드로</button>
-        <h1>나의 게임 대시보드</h1>
+        <button id="btn-back-main" class="ghost back-btn hidden">돌아가기</button>
+        <h1>게임 목록</h1>
       </div>
       <div class="topbar-right">
-        <span id="auth-chip" class="pill small muted">뷰어</span>
-        <button id="btn-settings" class="icon-btn" aria-label="권한 설정">⚙</button>
-        <div id="settings-panel" class="settings-panel hidden">
-          <input type="password" id="input-pass" placeholder="암호">
-          <button id="btn-apply-pass">확인</button>
-        </div>
+        <button id="auth-toggle" class="pill small muted">뷰어</button>
       </div>
     </header>
 
@@ -52,14 +47,14 @@
             <p id="gacha-message" class="gacha-message"></p>
           </div>
 
-          <div class="section">
+          <div class="section" id="spending-section">
             <div class="section-header">
               <h3>월정액 관리</h3>
             </div>
             <div id="spending-list" class="list"></div>
           </div>
 
-          <div class="section">
+          <div class="section" id="currency-section">
             <div class="section-header">
               <h3>재화 관리</h3>
             </div>

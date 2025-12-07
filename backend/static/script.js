@@ -77,7 +77,7 @@ function showDetailSkeleton() {
   el("detail-content").classList.remove("hidden");
   el("detail-title").textContent = "";
   el("detail-playtime").textContent = "";
-  el("detail-dates").textContent = "";
+  el("detail-dates").innerHTML = "";
   el("game-info").innerHTML = "";
   el("spending-list").innerHTML = "";
   el("currency-list").innerHTML = "";
@@ -111,7 +111,7 @@ async function selectGame(gameId) {
     detailIcon.classList.add("hidden");
   }
   el("detail-playtime").textContent = `${game.playtime_label} / UID ${game.uid ?? "-"}`;
-  el("detail-dates").textContent = `시작: ${game.start_date} • 종료: ${
+  el("detail-dates").innerHTML = `시작: ${game.start_date}<br>종료: ${
     game.end_date ?? "-"
   }`;
 
@@ -119,9 +119,9 @@ async function selectGame(gameId) {
   const entries = [
     { label: "게임 시작일", value: game.start_date },
     { label: "진행 날짜", value: game.playtime_label },
-    { label: "UID", value: game.uid ?? "-" },
-    { label: "쿠폰", value: game.coupon_url ?? "-" },
-  ];
+    game.uid ? { label: "UID", value: game.uid } : null,
+    game.coupon_url ? { label: "쿠폰", value: game.coupon_url } : null,
+  ].filter(Boolean);
   info.innerHTML = entries
     .map(
       (e) =>
@@ -145,9 +145,17 @@ async function selectGame(gameId) {
     gachaMessage.classList.add("hidden");
   }
 
+  // 던파 모바일은 결제/재화/그래프 숨김
+  const hideEconomy = game.title === "던파 모바일";
+  const spendingSection = el("spending-section");
+  const currencySection = el("currency-section");
+  spendingSection.classList.toggle("hidden", hideEconomy);
+  currencySection.classList.toggle("hidden", hideEconomy);
+
   await Promise.all([
-    loadSpending(gameId),
-    loadCurrencies(gameId),
+    hideEconomy ? Promise.resolve() : loadSpending(gameId),
+    hideEconomy ? Promise.resolve() : loadCurrencies(gameId),
+    hideEconomy ? Promise.resolve() : loadCurrencyChart(gameId),
     loadEvents(gameId),
     loadCharacters(gameId),
   ]);
@@ -264,7 +272,7 @@ function renderCurrencyFilters(currencies) {
 async function loadCurrencyChart(gameId) {
   const params = new URLSearchParams();
   if (state.currencyFilter !== "ALL") params.append("title", state.currencyFilter);
-  params.append("start_date", "2024-11-22");
+  params.append("start_date", "2023-11-22");
   const qs = params.toString() ? `?${params.toString()}` : "";
   const data = await fetchJSON(`/games/${gameId}/currencies/timeseries${qs}`);
   drawChart(el("currency-chart"), data.buckets);
@@ -441,22 +449,16 @@ function wireActions() {
   el("btn-back-main").addEventListener("click", () => {
     showView("gallery");
   });
-
-  const settingsBtn = el("btn-settings");
-  const panel = el("settings-panel");
-  const applyBtn = el("btn-apply-pass");
-  const passInput = el("input-pass");
-  settingsBtn.addEventListener("click", () => {
-    panel.classList.toggle("hidden");
-    if (!panel.classList.contains("hidden")) passInput.focus();
-  });
-  applyBtn.addEventListener("click", () => {
-    const val = passInput.value.trim();
+  const authToggle = el("auth-toggle");
+  authToggle.addEventListener("click", () => {
+    if (state.canEdit) {
+      setEditMode(false);
+      return;
+    }
+    const val = prompt("편집 모드 암호를 입력하세요.");
     const can = val === "0690";
     setEditMode(can);
     if (!can) alert("암호가 올바르지 않습니다. 뷰어 권한으로 전환됩니다.");
-    panel.classList.add("hidden");
-    passInput.value = "";
   });
 
   el("btn-end-game").addEventListener("click", async () => {
@@ -547,13 +549,15 @@ function restoreAuth() {
 }
 
 function applyEditState() {
-  const chip = el("auth-chip");
+  const chip = el("auth-toggle");
   if (state.canEdit) {
     chip.textContent = "편집";
     chip.classList.remove("muted");
+    chip.classList.add("active");
   } else {
     chip.textContent = "뷰어";
     chip.classList.add("muted");
+    chip.classList.remove("active");
   }
   // disable/enable global buttons
   const endBtn = el("btn-end-game");
