@@ -1,7 +1,7 @@
 # Fly.io app configuration.
 
 app = "clair-dashboard"
-primary_region = "sin"  # change to your closest region
+primary_region = "nrt"  # change to your closest region
 
 [build]
   dockerfile = "./Dockerfile"
