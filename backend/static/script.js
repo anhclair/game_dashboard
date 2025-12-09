@@ -122,7 +122,7 @@ function renderAlerts() {
       const list = ongoing_events
         .map((ev) => {
           const end = ev.end_date || "진행중";
-          return `${ev.game_title}, ${ev.title}, ${ev.start_date}, ${end}`;
+          return `${ev.game_title}, ${ev.title}, ${ev.start_date}~${end}`;
         })
         .join(" / ");
       line2.textContent = list;
@@ -782,8 +782,7 @@ function renderCharacters() {
 function renderVersion() {
   const versionEl = el("version-text");
   if (!versionEl) return;
-  const today = new Date().toISOString().slice(0, 10);
-  versionEl.textContent = `2025-12-07 최초 발행, ${today} 업데이트, 현재 버전 v.1.1.1`;
+  versionEl.textContent = `최초 발행 2025-12-07, 업데이트 2025-12-09, 현재 버전 v.1.1.2`;
 }
 
 function wireActions() {
