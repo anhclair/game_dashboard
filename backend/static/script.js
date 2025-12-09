@@ -782,7 +782,8 @@ function renderCharacters() {
 function renderVersion() {
   const versionEl = el("version-text");
   if (!versionEl) return;
-  versionEl.textContent = `최초 발행 2025-12-07, 업데이트 2025-12-09, 현재 버전 v.1.1.2`;
+  const today = new Date().toISOString().slice(0, 10);
+  versionEl.textContent = `최초 발행 2025-12-07, 업데이트 ${today}, 현재 버전 v.1.1.2`;
 }
 
 function wireActions() {
