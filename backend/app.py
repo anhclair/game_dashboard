@@ -1581,7 +1581,11 @@ def _game_refresh_info(game: Game) -> Tuple[Optional[int], dt.time]:
 
 
 def _most_recent_daily(now: dt.datetime, refresh_time: dt.time) -> dt.datetime:
-    candidate = dt.datetime.combine(now.date(), refresh_time, dt.timezone.utc)
+    # refresh_time is treated as LOCAL_TZ (KST) so resets match in-game schedule
+    rt = refresh_time
+    if rt.tzinfo is None:
+        rt = rt.replace(tzinfo=LOCAL_TZ)
+    candidate = dt.datetime.combine(now.date(), rt)
     if candidate > now:
         candidate -= dt.timedelta(days=1)
     return candidate
@@ -1594,17 +1598,23 @@ def _most_recent_weekly(
     target_py = (refresh_day + 5) % 7  # python weekday: Monday=0
     days_back = (now.weekday() - target_py) % 7
     date = (now - dt.timedelta(days=days_back)).date()
-    candidate = dt.datetime.combine(date, refresh_time, dt.timezone.utc)
+    rt = refresh_time
+    if rt.tzinfo is None:
+        rt = rt.replace(tzinfo=LOCAL_TZ)
+    candidate = dt.datetime.combine(date, rt)
     if candidate > now:
         candidate -= dt.timedelta(days=7)
     return candidate
 
 
 def _most_recent_monthly(now: dt.datetime, refresh_time: dt.time) -> dt.datetime:
-    anchor = dt.datetime.combine(now.replace(day=1).date(), refresh_time, dt.timezone.utc)
+    rt = refresh_time
+    if rt.tzinfo is None:
+        rt = rt.replace(tzinfo=LOCAL_TZ)
+    anchor = dt.datetime.combine(now.replace(day=1).date(), rt)
     if anchor > now:
         prev_month = (now.replace(day=1) - dt.timedelta(days=1)).replace(day=1)
-        anchor = dt.datetime.combine(prev_month.date(), refresh_time, dt.timezone.utc)
+        anchor = dt.datetime.combine(prev_month.date(), rt)
     return anchor
 
 
@@ -1632,7 +1642,7 @@ def _task_states(task: Task, lists: Tuple[List[str], List[str], List[str]]) -> T
 
 
 def _ensure_task_resets(task: Task, game: Game, db: Session) -> None:
-    now = dt.datetime.now(dt.timezone.utc)
+    now = dt.datetime.now(LOCAL_TZ)
     refresh_day, refresh_time = _game_refresh_info(game)
     lists = _task_lists(task)
     daily_list, weekly_list, monthly_list = lists
