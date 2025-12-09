@@ -34,6 +34,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 EXCEL_EPOCH = dt.date(1899, 12, 30)
 IMAGE_DIR = FILES_DIR / "image"
 SW_PATH = STATIC_DIR / "service-worker.js"
+LOCAL_TZ = dt.timezone(dt.timedelta(hours=9))  # KST
 
 REFRESH_DEFAULTS: Dict[str, Tuple[Optional[int], Optional[str]]] = {
     "니케": (3, "05:00"),
@@ -55,6 +56,9 @@ Base = declarative_base()
 
 def excel_serial_to_date(value: float) -> dt.date:
     return EXCEL_EPOCH + dt.timedelta(days=int(value))
+
+def today_local() -> dt.date:
+    return dt.datetime.now(LOCAL_TZ).date()
 
 def _ts(entry_ts: Optional[dt.datetime]) -> dt.datetime:
     if entry_ts is None:
@@ -1150,7 +1154,7 @@ def weekly_metrics(db: Session = Depends(get_db)):
 
 @app.get("/dashboard/alerts", response_model=DashboardAlert)
 def dashboard_alerts(db: Session = Depends(get_db)):
-    today = dt.date.today()
+    today = today_local()
     rows = db.execute(
         select(GameEvent, Game.title)
         .join(Game, Game.id == GameEvent.game_id)
