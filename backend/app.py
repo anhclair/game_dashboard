@@ -1,4 +1,5 @@
 import csv
+import json
 import os
 import datetime as dt
 from pathlib import Path
@@ -33,6 +34,17 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 EXCEL_EPOCH = dt.date(1899, 12, 30)
 IMAGE_DIR = FILES_DIR / "image"
 SW_PATH = STATIC_DIR / "service-worker.js"
+
+REFRESH_DEFAULTS: Dict[str, Tuple[Optional[int], Optional[str]]] = {
+    "니케": (3, "05:00"),
+    "헤이즈 리버브": (2, "05:00"),
+    "던파 모바일": (5, "06:00"),
+    "림버스 컴퍼니": (5, "06:00"),
+    "브라운더스트 2": (5, "09:00"),
+    "소녀전선2 망명": (2, "05:00"),
+    "명일방주": (2, "04:00"),
+    "스텔라 소라": (2, "05:00"),
+}
 
 engine = create_engine(
     DATABASE_URL, echo=False, future=True, connect_args={"check_same_thread": False}
@@ -114,6 +126,46 @@ def parse_date_value(value: Optional[str]) -> Optional[dt.date]:
         except ValueError:
             continue
     return None
+
+
+def parse_time_value(value: Optional[str]) -> Optional[dt.time]:
+    if value is None:
+        return None
+    if isinstance(value, dt.time):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return dt.datetime.strptime(text, "%H:%M").time()
+    except ValueError:
+        return None
+
+
+def parse_refresh_day(value: Optional[str]) -> Optional[int]:
+    day = parse_int(value)
+    if day is None:
+        return None
+    if 1 <= day <= 7:
+        return day
+    return None
+
+
+WEEKDAY_LABELS = {
+    1: "일요일",
+    2: "월요일",
+    3: "화요일",
+    4: "수요일",
+    5: "목요일",
+    6: "금요일",
+    7: "토요일",
+}
+
+
+def weekday_label(day: Optional[int]) -> Optional[str]:
+    if day is None:
+        return None
+    return WEEKDAY_LABELS.get(day)
 
 
 def column_index_from_ref(cell_ref: str) -> int:
@@ -232,6 +284,30 @@ def load_game_memo_map() -> Dict[str, str]:
     return mapping
 
 
+def load_game_refresh_map() -> Dict[str, Tuple[Optional[int], Optional[dt.time]]]:
+    path = FILES_DIR / "GameDB.xlsx"
+    rows = load_xlsx_rows(path)
+    if not rows:
+        return {}
+    headers = rows[0]
+    title_idx = headers.index("Title") if "Title" in headers else None
+    day_idx = headers.index("RefreshDay") if "RefreshDay" in headers else None
+    time_idx = headers.index("RefreshTime") if "RefreshTime" in headers else None
+    if title_idx is None or (day_idx is None and time_idx is None):
+        return {}
+    mapping: Dict[str, Tuple[Optional[int], Optional[dt.time]]] = {}
+    for r in rows[1:]:
+        if len(r) <= max(title_idx, day_idx or 0, time_idx or 0):
+            continue
+        title = r[title_idx]
+        if not title:
+            continue
+        day_val = parse_refresh_day(r[day_idx]) if day_idx is not None else None
+        time_val = parse_time_value(r[time_idx]) if time_idx is not None else None
+        mapping[title] = (day_val, time_val)
+    return mapping
+
+
 def load_currency_meta_map() -> Dict[Tuple[str, str], Tuple[str, float]]:
     rows = read_csv_rows(FILES_DIR / "CurrencyDB.csv")
     mapping: Dict[Tuple[str, str], Tuple[str, float]] = {}
@@ -246,6 +322,31 @@ def load_currency_meta_map() -> Dict[Tuple[str, str], Tuple[str, float]]:
     return mapping
 
 
+def parse_task_list(raw: Optional[str]) -> List[str]:
+    if raw is None:
+        return []
+    return [part.strip() for part in str(raw).split(";") if part.strip()]
+
+
+def _decode_state(raw: Optional[str], length: int) -> List[bool]:
+    if not raw:
+        return [False] * length
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        data = []
+    if not isinstance(data, list):
+        data = []
+    bools = [bool(x) for x in data][:length]
+    if len(bools) < length:
+        bools.extend([False] * (length - len(bools)))
+    return bools
+
+
+def _encode_state(values: List[bool]) -> str:
+    return json.dumps([bool(v) for v in values])
+
+
 class Game(Base):
     __tablename__ = "games"
 
@@ -258,6 +359,8 @@ class Game(Base):
     coupon_url = Column(String, nullable=True)
     gacha = Column(Integer, nullable=True, default=0)
     memo = Column(String, nullable=True)
+    refresh_day = Column(Integer, nullable=True)
+    refresh_time = Column(String, nullable=True)
 
     characters = relationship(
         "Character", back_populates="game", cascade="all, delete-orphan"
@@ -270,6 +373,9 @@ class Game(Base):
     )
     spendings = relationship(
         "Spending", back_populates="game", cascade="all, delete-orphan"
+    )
+    tasks = relationship(
+        "Task", back_populates="game", cascade="all, delete-orphan", uselist=False
     )
 
     @property
@@ -373,6 +479,40 @@ class Spending(Base):
         return "여유"
 
 
+class Task(Base):
+    __tablename__ = "tasks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    game_id = Column(Integer, ForeignKey("games.id"), nullable=False, unique=True)
+    daily_tasks = Column(String, nullable=True)
+    weekly_tasks = Column(String, nullable=True)
+    monthly_tasks = Column(String, nullable=True)
+    daily_state = Column(String, nullable=True)
+    weekly_state = Column(String, nullable=True)
+    monthly_state = Column(String, nullable=True)
+    last_daily_reset = Column(DateTime(timezone=True), nullable=True)
+    last_weekly_reset = Column(DateTime(timezone=True), nullable=True)
+    last_monthly_reset = Column(DateTime(timezone=True), nullable=True)
+
+    game = relationship("Game", back_populates="tasks")
+    histories = relationship(
+        "TaskHistory", back_populates="task", cascade="all, delete-orphan"
+    )
+
+
+class TaskHistory(Base):
+    __tablename__ = "task_histories"
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("tasks.id"), nullable=False, index=True)
+    daily_done = Column(Integer, nullable=True)
+    weekly_done = Column(Integer, nullable=True)
+    monthly_done = Column(Integer, nullable=True)
+    timestamp = Column(DateTime(timezone=True), default=func.now(), nullable=False)
+
+    task = relationship("Task", back_populates="histories")
+
+
 class Item(Base):
     __tablename__ = "items"
 
@@ -426,6 +566,10 @@ def ensure_columns() -> None:
             conn.exec_driver_sql("ALTER TABLE games ADD COLUMN gacha INTEGER DEFAULT 0")
         if "memo" not in cols:
             conn.exec_driver_sql("ALTER TABLE games ADD COLUMN memo STRING")
+        if "refresh_day" not in cols:
+            conn.exec_driver_sql("ALTER TABLE games ADD COLUMN refresh_day INTEGER")
+        if "refresh_time" not in cols:
+            conn.exec_driver_sql("ALTER TABLE games ADD COLUMN refresh_time STRING")
         ccols = {
             row[1]
             for row in conn.exec_driver_sql("PRAGMA table_info(currencies)").all()
@@ -468,6 +612,12 @@ def seed_games(db: Session) -> Dict[str, Game]:
         coupon_url = row.get("CouponURL") or None
         gacha_cost = parse_int(row.get("Gacha"), default=0) or 0
         memo = row.get("Memo") or None
+        refresh_day = parse_refresh_day(row.get("RefreshDay"))
+        refresh_time = parse_time_value(row.get("RefreshTime"))
+        if title in REFRESH_DEFAULTS:
+            def_day, def_time = REFRESH_DEFAULTS[title]
+            refresh_day = refresh_day or def_day
+            refresh_time = refresh_time or parse_time_value(def_time)
         if not start_date:
             continue
         if end_date:
@@ -483,10 +633,14 @@ def seed_games(db: Session) -> Dict[str, Game]:
             game.end_date = end_date
             game.stop_play = stop_play
         game.uid = uid
-    game.coupon_url = coupon_url
-    game.gacha = gacha_cost
-    game.memo = memo
-    games[title] = game
+        game.coupon_url = coupon_url
+        game.gacha = gacha_cost
+        game.memo = memo
+        if refresh_day is not None:
+            game.refresh_day = refresh_day
+        if refresh_time is not None:
+            game.refresh_time = refresh_time.strftime("%H:%M")
+        games[title] = game
     db.flush()
     return games
 
@@ -605,6 +759,48 @@ def seed_spendings(db: Session, games: Dict[str, Game]) -> None:
     db.flush()
 
 
+def seed_tasks(db: Session, games: Dict[str, Game]) -> Dict[str, Task]:
+    path = FILES_DIR / "TaskDB.xlsx"
+    rows = load_xlsx_rows(path)
+    if not rows:
+        return {}
+    headers = rows[0]
+    header_len = len(headers)
+    body = rows[1:]
+    row_dicts = [
+        dict(zip(headers, (r + [""] * (header_len - len(r)))[:header_len]))
+        for r in body
+    ]
+    tasks: Dict[str, Task] = {}
+    now = dt.datetime.now(dt.timezone.utc)
+    for row in row_dicts:
+        game_title = row.get("GameDB")
+        if not game_title:
+            continue
+        game = games.get(game_title)
+        if not game:
+            continue
+        daily_list = parse_task_list(row.get("DailyTask"))
+        weekly_list = parse_task_list(row.get("WeeklyTask"))
+        monthly_list = parse_task_list(row.get("MonthlyTask"))
+        task = db.execute(select(Task).where(Task.game_id == game.id)).scalar_one_or_none()
+        if not task:
+            task = Task(game=game)
+            db.add(task)
+        task.daily_tasks = ";".join(daily_list) if daily_list else None
+        task.weekly_tasks = ";".join(weekly_list) if weekly_list else None
+        task.monthly_tasks = ";".join(monthly_list) if monthly_list else None
+        task.daily_state = _encode_state(_decode_state(task.daily_state, len(daily_list)))
+        task.weekly_state = _encode_state(_decode_state(task.weekly_state, len(weekly_list)))
+        task.monthly_state = _encode_state(_decode_state(task.monthly_state, len(monthly_list)))
+        task.last_daily_reset = task.last_daily_reset or now
+        task.last_weekly_reset = task.last_weekly_reset or now
+        task.last_monthly_reset = task.last_monthly_reset or now
+        tasks[game_title] = task
+    db.flush()
+    return tasks
+
+
 def seed_data_from_files() -> None:
     if not FILES_DIR.exists():
         return
@@ -616,6 +812,7 @@ def seed_data_from_files() -> None:
             seed_currencies(db, games)
             seed_game_events(db, games)
             seed_spendings(db, games)
+            seed_tasks(db, games)
         backfill_seed_defaults(db)
         db.commit()
     finally:
@@ -681,6 +878,23 @@ class CurrencyTimeseries(BaseModel):
     to_date: dt.date
 
 
+class TaskOut(BaseModel):
+    id: int
+    game_id: int
+    daily_tasks: List[str]
+    weekly_tasks: List[str]
+    monthly_tasks: List[str]
+    daily_state: List[bool]
+    weekly_state: List[bool]
+    monthly_state: List[bool]
+
+
+class TaskStateUpdate(BaseModel):
+    daily_state: Optional[List[bool]] = None
+    weekly_state: Optional[List[bool]] = None
+    monthly_state: Optional[List[bool]] = None
+
+
 class GameOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -698,6 +912,8 @@ class GameOut(BaseModel):
     gacha_pull_count: Optional[int] = 0
     gacha_pull_message: Optional[str] = None
     memo: Optional[str]
+    refresh_day: Optional[int]
+    refresh_time: Optional[str]
 
     @field_validator("uid", mode="before")
     def coerce_uid(cls, v):
@@ -708,6 +924,14 @@ class GameOut(BaseModel):
     @field_serializer("uid")
     def serialize_uid(self, value):
         return str(value) if value is not None else None
+
+    @field_serializer("refresh_time")
+    def serialize_refresh_time(self, value):
+        if value is None:
+            return None
+        if isinstance(value, dt.time):
+            return value.strftime("%H:%M")
+        return str(value)
 
 
 class CharacterOut(BaseModel):
@@ -751,6 +975,12 @@ class GameEventOut(BaseModel):
     end_date: Optional[dt.date]
     priority: str
     state: str
+
+
+class DashboardAlert(BaseModel):
+    ongoing_count: int
+    ongoing_events: List[GameEventOut]
+    tomorrow_refresh_titles: List[str]
 
 
 class SpendingOut(BaseModel):
@@ -897,6 +1127,41 @@ def weekly_metrics(db: Session = Depends(get_db)):
     return WeeklyMetrics(buckets=buckets, from_date=start_date, to_date=today)
 
 
+@app.get("/dashboard/alerts", response_model=DashboardAlert)
+def dashboard_alerts(db: Session = Depends(get_db)):
+    today = dt.date.today()
+    events = (
+        db.execute(
+            select(GameEvent)
+            .where(
+                GameEvent.start_date <= today,
+                (GameEvent.end_date.is_(None) | (GameEvent.end_date >= today)),
+            )
+            .order_by(GameEvent.start_date.asc(), GameEvent.id.asc())
+        )
+        .scalars()
+        .all()
+    )
+    ongoing = [GameEventOut.model_validate(e) for e in events]
+
+    games = db.execute(select(Game)).scalars().all()
+    tomorrow = today + dt.timedelta(days=1)
+    # convert python weekday (Mon=0) to desired format (Sun=1)
+    tomorrow_day = ((tomorrow.weekday() + 1) % 7) + 1
+    refresh_titles: List[str] = []
+    for g in games:
+        refresh_day, _ = _game_refresh_info(g)
+        if refresh_day == tomorrow_day:
+            refresh_titles.append(g.title)
+    refresh_titles.sort()
+
+    return DashboardAlert(
+        ongoing_count=len(ongoing),
+        ongoing_events=ongoing,
+        tomorrow_refresh_titles=refresh_titles,
+    )
+
+
 @app.get("/games", response_model=List[GameOut])
 def list_games(
     during_play_only: bool = False,
@@ -942,6 +1207,13 @@ def get_latest_currencies(db: Session, game: Game) -> List[Currency]:
     return list(latest_by_title.values())
 
 
+def get_task_or_404(game_id: int, db: Session) -> Task:
+    task = db.execute(select(Task).where(Task.game_id == game_id)).scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
+
+
 def backfill_seed_defaults(db: Session) -> None:
     """
     Safely fills new columns using seed files without overriding user data.
@@ -954,6 +1226,7 @@ def backfill_seed_defaults(db: Session) -> None:
     games = db.execute(select(Game)).scalars().all()
     gacha_map = load_game_gacha_map()
     memo_map = load_game_memo_map()
+    refresh_map = load_game_refresh_map()
     if gacha_map or memo_map:
         for game in games:
             if (game.gacha or 0) == 0 and gacha_map:
@@ -964,6 +1237,24 @@ def backfill_seed_defaults(db: Session) -> None:
                 m = memo_map.get(game.title)
                 if m:
                     game.memo = m
+    if refresh_map or REFRESH_DEFAULTS:
+        for game in games:
+            ref_day = game.refresh_day
+            ref_time = game.refresh_time
+            if game.title in refresh_map:
+                day_val, time_val = refresh_map[game.title]
+                if ref_day is None and day_val is not None:
+                    ref_day = day_val
+                if ref_time is None and time_val is not None:
+                    ref_time = time_val.strftime("%H:%M")
+            if game.title in REFRESH_DEFAULTS:
+                def_day, def_time = REFRESH_DEFAULTS[game.title]
+                if ref_day is None and def_day is not None:
+                    ref_day = def_day
+                if ref_time is None and def_time is not None:
+                    ref_time = def_time
+            game.refresh_day = ref_day
+            game.refresh_time = ref_time
     currency_map = load_currency_meta_map()
     if currency_map:
         for game in games:
@@ -1015,6 +1306,45 @@ def list_characters(game_id: int, db: Session = Depends(get_db)):
 def list_currencies(game_id: int, db: Session = Depends(get_db)):
     game = get_game_or_404(game_id, db)
     return get_latest_currencies(db, game)
+
+
+@app.get("/games/{game_id}/tasks", response_model=TaskOut)
+def get_tasks(game_id: int, db: Session = Depends(get_db)) -> TaskOut:
+    game = get_game_or_404(game_id, db)
+    task = get_task_or_404(game.id, db)
+    _ensure_task_resets(task, game, db)
+    db.commit()
+    db.refresh(task)
+    return task_to_out(task)
+
+
+def _normalize_state(new_state: Optional[List[bool]], length: int, current: List[bool]) -> List[bool]:
+    if new_state is None:
+        return current
+    vals = [bool(v) for v in new_state[:length]]
+    if len(vals) < length:
+        vals.extend([False] * (length - len(vals)))
+    return vals
+
+
+@app.post("/tasks/{task_id}/state", response_model=TaskOut)
+def update_task_state(task_id: int, payload: TaskStateUpdate, db: Session = Depends(get_db)) -> TaskOut:
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    game = task.game or get_game_or_404(task.game_id, db)
+    _ensure_task_resets(task, game, db)
+    lists = _task_lists(task)
+    states = list(_task_states(task, lists))
+    states[0] = _normalize_state(payload.daily_state, len(lists[0]), states[0])
+    states[1] = _normalize_state(payload.weekly_state, len(lists[1]), states[1])
+    states[2] = _normalize_state(payload.monthly_state, len(lists[2]), states[2])
+    task.daily_state = _encode_state(states[0])
+    task.weekly_state = _encode_state(states[1])
+    task.monthly_state = _encode_state(states[2])
+    db.commit()
+    db.refresh(task)
+    return task_to_out(task)
 
 
 @app.post("/currencies/{currency_id}/adjust", response_model=CurrencyOut)
@@ -1110,6 +1440,24 @@ def create_game_event(
     return event
 
 
+@app.put("/games/{game_id}/events/{event_id}", response_model=GameEventOut)
+def update_game_event(
+    game_id: int, event_id: int, payload: EventCreate, db: Session = Depends(get_db)
+):
+    game = get_game_or_404(game_id, db)
+    event = db.get(GameEvent, event_id)
+    if not event or event.game_id != game.id:
+        raise HTTPException(status_code=404, detail="Event not found")
+    event.title = payload.title
+    event.type = payload.type
+    event.start_date = payload.start_date
+    event.end_date = payload.end_date
+    event.priority = payload.priority
+    db.commit()
+    db.refresh(event)
+    return event
+
+
 @app.post("/games/{game_id}/memo", response_model=GameOut)
 def update_game_memo(
     game_id: int, payload: GameMemoUpdate, db: Session = Depends(get_db)
@@ -1179,7 +1527,8 @@ def _max_or_latest_in_range(
             if e.title == title and start_dt <= _ts(e.timestamp) <= end_dt
         ]
         if in_range:
-            return max(e.counts for e in in_range)
+            in_range.sort(key=lambda e: (_ts(e.timestamp), e.id), reverse=True)
+            return in_range[0].counts
         return _latest_count_on_or_before(entries, end_date, title=title)
 
     # ALL: sum per title using their own max-or-latest in range
@@ -1188,6 +1537,134 @@ def _max_or_latest_in_range(
     for t in titles:
         total += _max_or_latest_in_range(entries, start_date, end_date, title=t)
     return total
+
+
+def _game_refresh_info(game: Game) -> Tuple[Optional[int], dt.time]:
+    day = game.refresh_day
+    time_val = parse_time_value(game.refresh_time)
+    if game.title in REFRESH_DEFAULTS:
+        def_day, def_time = REFRESH_DEFAULTS[game.title]
+        day = day or def_day
+        time_val = time_val or parse_time_value(def_time)
+    return day, time_val or dt.time(5, 0)
+
+
+def _most_recent_daily(now: dt.datetime, refresh_time: dt.time) -> dt.datetime:
+    candidate = dt.datetime.combine(now.date(), refresh_time, dt.timezone.utc)
+    if candidate > now:
+        candidate -= dt.timedelta(days=1)
+    return candidate
+
+
+def _most_recent_weekly(
+    now: dt.datetime, refresh_time: dt.time, refresh_day: int
+) -> dt.datetime:
+    # refresh_day: 1=Sunday ... 7=Saturday
+    target_py = (refresh_day + 5) % 7  # python weekday: Monday=0
+    days_back = (now.weekday() - target_py) % 7
+    date = (now - dt.timedelta(days=days_back)).date()
+    candidate = dt.datetime.combine(date, refresh_time, dt.timezone.utc)
+    if candidate > now:
+        candidate -= dt.timedelta(days=7)
+    return candidate
+
+
+def _most_recent_monthly(now: dt.datetime, refresh_time: dt.time) -> dt.datetime:
+    anchor = dt.datetime.combine(now.replace(day=1).date(), refresh_time, dt.timezone.utc)
+    if anchor > now:
+        prev_month = (now.replace(day=1) - dt.timedelta(days=1)).replace(day=1)
+        anchor = dt.datetime.combine(prev_month.date(), refresh_time, dt.timezone.utc)
+    return anchor
+
+
+def _needs_reset(last: Optional[dt.datetime], target: dt.datetime) -> bool:
+    if last is None:
+        return True
+    return _ts(last) < _ts(target)
+
+
+def _task_lists(task: Task) -> Tuple[List[str], List[str], List[str]]:
+    return (
+        parse_task_list(task.daily_tasks),
+        parse_task_list(task.weekly_tasks),
+        parse_task_list(task.monthly_tasks),
+    )
+
+
+def _task_states(task: Task, lists: Tuple[List[str], List[str], List[str]]) -> Tuple[List[bool], List[bool], List[bool]]:
+    daily_list, weekly_list, monthly_list = lists
+    return (
+        _decode_state(task.daily_state, len(daily_list)),
+        _decode_state(task.weekly_state, len(weekly_list)),
+        _decode_state(task.monthly_state, len(monthly_list)),
+    )
+
+
+def _ensure_task_resets(task: Task, game: Game, db: Session) -> None:
+    now = dt.datetime.now(dt.timezone.utc)
+    refresh_day, refresh_time = _game_refresh_info(game)
+    lists = _task_lists(task)
+    daily_list, weekly_list, monthly_list = lists
+    states = list(_task_states(task, lists))
+
+    recent_daily = _most_recent_daily(now, refresh_time)
+    if _needs_reset(task.last_daily_reset, recent_daily):
+        if daily_list:
+            db.add(
+                TaskHistory(
+                    task=task,
+                    daily_done=int(all(states[0])) if states[0] else 0,
+                    timestamp=recent_daily,
+                )
+            )
+        states[0] = [False] * len(daily_list)
+        task.daily_state = _encode_state(states[0])
+        task.last_daily_reset = recent_daily
+
+    if refresh_day:
+        recent_weekly = _most_recent_weekly(now, refresh_time, refresh_day)
+        if _needs_reset(task.last_weekly_reset, recent_weekly):
+            if weekly_list:
+                db.add(
+                    TaskHistory(
+                        task=task,
+                        weekly_done=int(all(states[1])) if states[1] else 0,
+                        timestamp=recent_weekly,
+                    )
+                )
+            states[1] = [False] * len(weekly_list)
+            task.weekly_state = _encode_state(states[1])
+            task.last_weekly_reset = recent_weekly
+
+    recent_monthly = _most_recent_monthly(now, refresh_time)
+    if _needs_reset(task.last_monthly_reset, recent_monthly):
+        if monthly_list:
+            db.add(
+                TaskHistory(
+                    task=task,
+                    monthly_done=int(all(states[2])) if states[2] else 0,
+                    timestamp=recent_monthly,
+                )
+            )
+        states[2] = [False] * len(monthly_list)
+        task.monthly_state = _encode_state(states[2])
+        task.last_monthly_reset = recent_monthly
+    db.flush()
+
+
+def task_to_out(task: Task) -> TaskOut:
+    lists = _task_lists(task)
+    states = _task_states(task, lists)
+    return TaskOut(
+        id=task.id,
+        game_id=task.game_id,
+        daily_tasks=lists[0],
+        weekly_tasks=lists[1],
+        monthly_tasks=lists[2],
+        daily_state=states[0],
+        weekly_state=states[1],
+        monthly_state=states[2],
+    )
 
 
 @app.get("/games/{game_id}/currencies/timeseries", response_model=CurrencyTimeseries)

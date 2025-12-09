@@ -70,6 +70,19 @@ a:hover { text-decoration: underline; }
   min-height: calc(100vh - 64px);
 }
 
+.alert-banner {
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin: 0 0 16px;
+}
+.alert-line {
+  margin: 4px 0;
+  font-weight: 600;
+}
+.alert-line.accent { color: #1d4ed8; }
+
 .gallery {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -225,6 +238,22 @@ a:hover { text-decoration: underline; }
   white-space: pre-wrap;
 }
 .memo-toggle .ghost { padding: 6px 10px; }
+
+.task-block {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.task-title { margin: 0 0 8px; font-weight: 700; }
+.task-list label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+}
+.task-list input[type="checkbox"] { width: 16px; height: 16px; }
 .memo-box textarea {
   width: 100%;
   box-sizing: border-box;
@@ -248,6 +277,7 @@ a:hover { text-decoration: underline; }
 }
 .row { display: flex; gap: 8px; }
 .row.compact { flex-wrap: wrap; align-items: center; gap: 6px; }
+.row.space-between { justify-content: space-between; align-items: center; }
 .level-input { max-width: 90px; flex: 0 0 auto; }
 .inline-check { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
 .small-btn { padding: 6px 10px; white-space: nowrap; }
@@ -352,6 +382,13 @@ button.ghost:hover { background: #fef2f2; }
   white-space: nowrap;
   pointer-events: none;
   z-index: 2;
+}
+
+.version-text {
+  color: #6b7280;
+  text-align: right;
+  font-size: 12px;
+  margin-top: 24px;
 }
 
 @media (max-width: 1024px) {

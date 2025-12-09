@@ -4,6 +4,9 @@ const state = {
   currencyFilter: "ALL",
   view: "gallery",
   canEdit: false,
+  alerts: null,
+  tasks: null,
+  eventEditId: null,
   characters: [],
   characterFilter: {
     level: "",
@@ -34,6 +37,17 @@ function imagePath(title, type) {
 }
 
 const el = (id) => document.getElementById(id);
+const WEEKDAY_LABEL = ["", "일요일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일"];
+
+function weekdayLabel(day) {
+  if (!day) return "-";
+  return WEEKDAY_LABEL[day] || "-";
+}
+
+function formatTimeLabel(val) {
+  if (!val) return "-";
+  return val.toString().slice(0, 5);
+}
 
 async function fetchJSON(url, options = {}) {
   const res = await fetch(url, {
@@ -74,6 +88,58 @@ function renderGallery() {
     node.addEventListener("click", () => selectGame(g.id));
     gallery.appendChild(node);
   });
+}
+
+async function loadAlerts() {
+  try {
+    const alerts = await fetchJSON("/dashboard/alerts");
+    state.alerts = alerts;
+    renderAlerts();
+  } catch (err) {
+    console.error("alert load failed", err);
+  }
+}
+
+function renderAlerts() {
+  const banner = el("alert-banner");
+  if (!banner) return;
+  if (!state.alerts) {
+    banner.classList.add("hidden");
+    return;
+  }
+  const { ongoing_count, ongoing_events, tomorrow_refresh_titles } = state.alerts;
+  const line1 = el("alert-line1");
+  const line2 = el("alert-line2");
+  const line3 = el("alert-line3");
+  if (line1) {
+    line1.textContent =
+      ongoing_count > 0
+        ? `📢 현재 ${ongoing_count}개의 이벤트가 진행 중이에요!`
+        : "오늘은 진행 중인 이벤트가 없어요.";
+  }
+  if (line2) {
+    if (ongoing_count > 0 && ongoing_events?.length) {
+      const list = ongoing_events
+        .map((ev) => {
+          const period = ev.end_date ? `${ev.start_date} ~ ${ev.end_date}` : `${ev.start_date} ~ 진행중`;
+          return `${ev.title} • ${ev.type} • ${period}`;
+        })
+        .join(" / ");
+      line2.textContent = list;
+      line2.classList.remove("hidden");
+    } else {
+      line2.textContent = "";
+      line2.classList.add("hidden");
+    }
+  }
+  if (line3) {
+    const refreshText =
+      tomorrow_refresh_titles && tomorrow_refresh_titles.length
+        ? `📢 내일은 ${tomorrow_refresh_titles.join(", ")} 주간 초기화되는 날! 숙제 확인!`
+        : "내일은 주간 초기화되는 게임이 없어요.";
+    line3.textContent = refreshText;
+  }
+  banner.classList.remove("hidden");
 }
 
 async function loadGames() {
@@ -131,6 +197,7 @@ async function selectGame(gameId) {
   state.characters = [];
   showView("detail");
   showDetailSkeleton();
+  resetEventForm();
 
   el("detail-title").textContent = game.title;
   const detailIcon = el("detail-icon");
@@ -146,6 +213,10 @@ async function selectGame(gameId) {
   el("detail-dates").innerHTML = `시작: ${game.start_date}<br>종료: ${
     game.end_date ?? "-"
   }`;
+  const refreshLine = el("detail-refresh");
+  const weeklyLabel = weekdayLabel(game.refresh_day);
+  const dailyLabel = formatTimeLabel(game.refresh_time);
+  refreshLine.innerHTML = `주간 초기화: ${weeklyLabel}<br>일일 초기화: ${dailyLabel}`;
 
   const info = el("game-info");
   const entries = [
@@ -222,6 +293,7 @@ async function selectGame(gameId) {
   currencySection.classList.toggle("hidden", hideEconomy);
 
   await Promise.all([
+    loadTasks(gameId),
     hideEconomy ? Promise.resolve() : loadSpending(gameId),
     hideEconomy ? Promise.resolve() : loadCurrencies(gameId),
     hideEconomy ? Promise.resolve() : loadCurrencyChart(gameId),
@@ -272,6 +344,14 @@ async function loadSpending(gameId) {
   });
 }
 
+function resetEventForm() {
+  const form = el("event-form");
+  if (form) form.reset();
+  state.eventEditId = null;
+  const submitBtn = el("event-submit-btn");
+  if (submitBtn) submitBtn.textContent = "이벤트 추가";
+}
+
 async function loadCurrencies(gameId) {
   const list = el("currency-list");
   list.innerHTML = "로딩 중...";
@@ -312,6 +392,97 @@ async function loadCurrencies(gameId) {
     });
     list.appendChild(item);
   });
+}
+
+async function loadTasks(gameId) {
+  const section = el("task-section");
+  state.tasks = null;
+  if (section) section.classList.add("hidden");
+  try {
+    const tasks = await fetchJSON(`/games/${gameId}/tasks`);
+    state.tasks = tasks;
+    renderTasks();
+  } catch (err) {
+    if (section) section.classList.add("hidden");
+    console.warn("tasks unavailable", err);
+  }
+}
+
+async function saveTaskState() {
+  if (!state.tasks) return;
+  try {
+    const updated = await fetchJSON(`/tasks/${state.tasks.id}/state`, {
+      method: "POST",
+      body: JSON.stringify({
+        daily_state: state.tasks.daily_state,
+        weekly_state: state.tasks.weekly_state,
+        monthly_state: state.tasks.monthly_state,
+      }),
+    });
+    state.tasks = updated;
+    renderTasks();
+  } catch (err) {
+    alert("숙제 상태 저장에 실패했습니다.");
+    throw err;
+  }
+}
+
+function renderTaskGroup(key, items, states) {
+  const block = el(`task-${key}`);
+  const list = el(`task-${key}-list`);
+  if (!block || !list) return;
+  if (!items || items.length === 0) {
+    block.classList.add("hidden");
+    list.innerHTML = "";
+    return;
+  }
+  block.classList.remove("hidden");
+  list.innerHTML = "";
+  items.forEach((text, idx) => {
+    const row = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = Boolean(states[idx]);
+    cb.disabled = !state.canEdit;
+    cb.addEventListener("change", async () => {
+      if (!state.canEdit) {
+        cb.checked = !cb.checked;
+        alert("뷰어 권한입니다.");
+        return;
+      }
+      state.tasks[`${key}_state`][idx] = cb.checked;
+      try {
+        await saveTaskState();
+      } catch {
+        state.tasks[`${key}_state`][idx] = !cb.checked;
+        cb.checked = !cb.checked;
+      }
+    });
+    const span = document.createElement("span");
+    span.textContent = text;
+    row.appendChild(cb);
+    row.appendChild(span);
+    list.appendChild(row);
+  });
+}
+
+function renderTasks() {
+  const section = el("task-section");
+  if (!section) return;
+  const data = state.tasks;
+  if (!data) {
+    section.classList.add("hidden");
+    return;
+  }
+  const hasAny =
+    (data.daily_tasks && data.daily_tasks.length) ||
+    (data.weekly_tasks && data.weekly_tasks.length) ||
+    (data.monthly_tasks && data.monthly_tasks.length);
+  section.classList.toggle("hidden", !hasAny);
+  if (!hasAny) return;
+  renderTaskGroup("daily", data.daily_tasks, data.daily_state);
+  renderTaskGroup("weekly", data.weekly_tasks, data.weekly_state);
+  renderTaskGroup("monthly", data.monthly_tasks, data.monthly_state);
 }
 
 function renderCurrencyFilters(currencies) {
@@ -476,6 +647,18 @@ async function loadEvents(gameId) {
       <p class="meta">${ev.type} • ${ev.priority} • ${period}</p>
       <span class="badge">${ev.state}</span>
     `;
+    item.addEventListener("click", () => {
+      const form = el("event-form");
+      if (!form) return;
+      form.title.value = ev.title;
+      form.type.value = ev.type;
+      form.start_date.value = ev.start_date;
+      form.end_date.value = ev.end_date ?? "";
+      form.priority.value = ev.priority;
+      state.eventEditId = ev.id;
+      const submitBtn = el("event-submit-btn");
+      if (submitBtn) submitBtn.textContent = "이벤트 수정";
+    });
     list.appendChild(item);
   });
 }
@@ -581,6 +764,13 @@ function renderCharacters() {
   });
 }
 
+function renderVersion() {
+  const versionEl = el("version-text");
+  if (!versionEl) return;
+  const today = new Date().toISOString().slice(0, 10);
+  versionEl.textContent = `2025-12-07 최초 발행, ${today} 업데이트, 현재 버전 v.1.1.0`;
+}
+
 function wireActions() {
   el("btn-back-main").addEventListener("click", () => {
     showView("gallery");
@@ -625,17 +815,35 @@ function wireActions() {
       Array.from(form.entries()).filter(([, v]) => v !== "")
     );
     if (!payload.start_date) return;
+    const submitBtn = el("event-submit-btn");
+    if (submitBtn) {
+      submitBtn.setAttribute("disabled", "true");
+      submitBtn.classList.add("disabled-btn");
+      submitBtn.textContent = state.eventEditId ? "수정 중..." : "추가 중...";
+    }
     try {
-      await fetchJSON(`/games/${state.selected.id}/events`, {
-        method: "POST",
+      const url = state.eventEditId
+        ? `/games/${state.selected.id}/events/${state.eventEditId}`
+        : `/games/${state.selected.id}/events`;
+      const method = state.eventEditId ? "PUT" : "POST";
+      await fetchJSON(url, {
+        method,
         body: JSON.stringify(payload),
       });
-      e.target.reset();
+      resetEventForm();
       await loadEvents(state.selected.id);
+      await loadAlerts();
     } catch {
       alert("이벤트 추가 실패");
+    } finally {
+      if (submitBtn) {
+        submitBtn.removeAttribute("disabled");
+        submitBtn.classList.remove("disabled-btn");
+        submitBtn.textContent = state.eventEditId ? "이벤트 수정" : "이벤트 추가";
+      }
     }
   });
+  el("event-reset-btn").addEventListener("click", () => resetEventForm());
 
   const lvlFilter = el("filter-level");
   const gradeFilter = el("filter-grade");
@@ -672,7 +880,9 @@ async function init() {
   }
   restoreAuth();
   wireActions();
+  await loadAlerts();
   await loadGames();
+  renderVersion();
   applyEditState();
 }
 
@@ -758,4 +968,7 @@ function applyEditState() {
     memoSave.disabled = !state.canEdit;
     memoSave.classList.toggle("disabled-btn", !state.canEdit);
   }
+  document.querySelectorAll("#task-section input[type=\"checkbox\"]").forEach((cb) => {
+    cb.disabled = !state.canEdit;
+  });
 }
