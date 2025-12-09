@@ -6,6 +6,7 @@
 - `rm -rf`, `rm -rv` 등 강제 삭제 명령 사용 금지. 삭제 필요 시 사유와 내용을 명시해 승인 후 진행.
 - 모든 작업은 `/home/clairkim/clair_gamedashboard`에서 진행하고 VS Code와 Git 연동 상태를 유지.
 - 작업 후 README에 간략한 코드 리뷰를 버전명과 함께 작성할 것.
+- 배포 시 사용 명령: `~/.fly/bin/flyctl deploy --remote-only`
 
 ## v1.1.2 코드 변경 리뷰 (요약)
 - 메인 대시보드 알림 추가: 진행 중 이벤트/내일 주간 초기화 게임 안내.
