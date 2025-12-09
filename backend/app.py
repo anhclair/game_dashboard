@@ -660,9 +660,11 @@ def seed_characters(db: Session, games: Dict[str, Game]) -> None:
                 Character.title == title, Character.game_id == game.id
             )
         ).scalar_one_or_none()
-        if not character:
-            character = Character(title=title, game=game)
-            db.add(character)
+        if character:
+            # 기존 유저 수정값을 덮어쓰지 않기 위해 seed는 신규 캐릭터만 추가
+            continue
+        character = Character(title=title, game=game)
+        db.add(character)
         character.level = parse_int(row.get("Level"))
         character.grade = row.get("Grade") or None
         character.overpower = parse_int(row.get("Overpower"), default=0) or 0
@@ -722,9 +724,11 @@ def seed_game_events(db: Session, games: Dict[str, Game]) -> None:
             .scalars()
             .first()
         )
-        if not event:
-            event = GameEvent(title=title, game=game)
-            db.add(event)
+        if event:
+            # 사용자 수정 이벤트를 덮어쓰지 않음
+            continue
+        event = GameEvent(title=title, game=game)
+        db.add(event)
         event.type = evt_type
         event.start_date = start_date
         event.end_date = end_date

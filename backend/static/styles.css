@@ -80,6 +80,7 @@ a:hover { text-decoration: underline; }
 .alert-line {
   margin: 4px 0;
   font-weight: 600;
+  white-space: pre-line;
 }
 .alert-line.accent { color: #1d4ed8; }
 

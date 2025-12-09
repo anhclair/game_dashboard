@@ -119,12 +119,16 @@ function renderAlerts() {
   }
   if (line2) {
     if (ongoing_count > 0 && ongoing_events?.length) {
-      const list = ongoing_events
-        .map((ev) => {
-          const end = ev.end_date || "진행중";
-          return `${ev.game_title}, ${ev.title}, ${ev.start_date}~${end}`;
-        })
-        .join(" / ");
+      const order = [];
+      const counts = {};
+      ongoing_events.forEach((ev) => {
+        if (!counts[ev.game_title]) {
+          counts[ev.game_title] = 0;
+          order.push(ev.game_title);
+        }
+        counts[ev.game_title] += 1;
+      });
+      const list = order.map((title) => `${title}, ${counts[title]}개`).join("\n");
       line2.textContent = list;
       line2.classList.remove("hidden");
     } else {
