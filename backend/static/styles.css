@@ -254,6 +254,12 @@ a:hover { text-decoration: underline; }
   margin: 4px 0;
 }
 .task-list input[type="checkbox"] { width: 16px; height: 16px; }
+.task-hint {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: #2563eb;
+  font-weight: 600;
+}
 .memo-box textarea {
   width: 100%;
   box-sizing: border-box;

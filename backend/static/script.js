@@ -121,8 +121,8 @@ function renderAlerts() {
     if (ongoing_count > 0 && ongoing_events?.length) {
       const list = ongoing_events
         .map((ev) => {
-          const period = ev.end_date ? `${ev.start_date} ~ ${ev.end_date}` : `${ev.start_date} ~ 진행중`;
-          return `${ev.title} • ${ev.type} • ${period}`;
+          const end = ev.end_date || "진행중";
+          return `${ev.game_title}, ${ev.title}, ${ev.start_date}, ${end}`;
         })
         .join(" / ");
       line2.textContent = list;
@@ -480,6 +480,21 @@ function renderTasks() {
     (data.monthly_tasks && data.monthly_tasks.length);
   section.classList.toggle("hidden", !hasAny);
   if (!hasAny) return;
+  const dailyHint = el("task-daily-hint");
+  const weeklyHint = el("task-weekly-hint");
+  const monthlyHint = el("task-monthly-hint");
+  if (dailyHint) {
+    dailyHint.textContent = data.daily_message || "";
+    dailyHint.classList.toggle("hidden", !data.daily_message);
+  }
+  if (weeklyHint) {
+    weeklyHint.textContent = data.weekly_message || "";
+    weeklyHint.classList.toggle("hidden", !data.weekly_message);
+  }
+  if (monthlyHint) {
+    monthlyHint.textContent = data.monthly_message || "";
+    monthlyHint.classList.toggle("hidden", !data.monthly_message);
+  }
   renderTaskGroup("daily", data.daily_tasks, data.daily_state);
   renderTaskGroup("weekly", data.weekly_tasks, data.weekly_state);
   renderTaskGroup("monthly", data.monthly_tasks, data.monthly_state);
@@ -768,7 +783,7 @@ function renderVersion() {
   const versionEl = el("version-text");
   if (!versionEl) return;
   const today = new Date().toISOString().slice(0, 10);
-  versionEl.textContent = `2025-12-07 최초 발행, ${today} 업데이트, 현재 버전 v.1.1.0`;
+  versionEl.textContent = `2025-12-07 최초 발행, ${today} 업데이트, 현재 버전 v.1.1.1`;
 }
 
 function wireActions() {

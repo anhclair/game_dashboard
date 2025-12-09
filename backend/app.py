@@ -887,6 +887,9 @@ class TaskOut(BaseModel):
     daily_state: List[bool]
     weekly_state: List[bool]
     monthly_state: List[bool]
+    daily_message: Optional[str] = None
+    weekly_message: Optional[str] = None
+    monthly_message: Optional[str] = None
 
 
 class TaskStateUpdate(BaseModel):
@@ -977,9 +980,23 @@ class GameEventOut(BaseModel):
     state: str
 
 
+class EventAlertOut(BaseModel):
+    title: str
+    type: str
+    start_date: dt.date
+    end_date: Optional[dt.date]
+    game_title: str
+
+
 class DashboardAlert(BaseModel):
     ongoing_count: int
-    ongoing_events: List[GameEventOut]
+    ongoing_events: List[EventAlertOut]
+    tomorrow_refresh_titles: List[str]
+
+
+class DashboardAlert(BaseModel):
+    ongoing_count: int
+    ongoing_events: List[EventAlertOut]
     tomorrow_refresh_titles: List[str]
 
 
@@ -1130,19 +1147,25 @@ def weekly_metrics(db: Session = Depends(get_db)):
 @app.get("/dashboard/alerts", response_model=DashboardAlert)
 def dashboard_alerts(db: Session = Depends(get_db)):
     today = dt.date.today()
-    events = (
-        db.execute(
-            select(GameEvent)
-            .where(
-                GameEvent.start_date <= today,
-                (GameEvent.end_date.is_(None) | (GameEvent.end_date >= today)),
-            )
-            .order_by(GameEvent.start_date.asc(), GameEvent.id.asc())
+    rows = db.execute(
+        select(GameEvent, Game.title)
+        .join(Game, Game.id == GameEvent.game_id)
+        .where(
+            GameEvent.start_date <= today,
+            (GameEvent.end_date.is_(None) | (GameEvent.end_date >= today)),
         )
-        .scalars()
-        .all()
-    )
-    ongoing = [GameEventOut.model_validate(e) for e in events]
+        .order_by(GameEvent.start_date.asc(), GameEvent.id.asc())
+    ).all()
+    ongoing = [
+        EventAlertOut(
+            title=ev.title,
+            type=ev.type,
+            start_date=ev.start_date,
+            end_date=ev.end_date,
+            game_title=game_title,
+        )
+        for ev, game_title in rows
+    ]
 
     games = db.execute(select(Game)).scalars().all()
     tomorrow = today + dt.timedelta(days=1)
@@ -1315,7 +1338,7 @@ def get_tasks(game_id: int, db: Session = Depends(get_db)) -> TaskOut:
     _ensure_task_resets(task, game, db)
     db.commit()
     db.refresh(task)
-    return task_to_out(task)
+    return task_to_out(task, db)
 
 
 def _normalize_state(new_state: Optional[List[bool]], length: int, current: List[bool]) -> List[bool]:
@@ -1344,7 +1367,7 @@ def update_task_state(task_id: int, payload: TaskStateUpdate, db: Session = Depe
     task.monthly_state = _encode_state(states[2])
     db.commit()
     db.refresh(task)
-    return task_to_out(task)
+    return task_to_out(task, db)
 
 
 @app.post("/currencies/{currency_id}/adjust", response_model=CurrencyOut)
@@ -1651,10 +1674,53 @@ def _ensure_task_resets(task: Task, game: Game, db: Session) -> None:
         task.last_monthly_reset = recent_monthly
     db.flush()
 
+def _latest_history(task: Task, db: Session, field: str) -> Optional[int]:
+    col = getattr(TaskHistory, field)
+    row = (
+        db.execute(
+            select(TaskHistory)
+            .where(TaskHistory.task_id == task.id, col.is_not(None))
+            .order_by(TaskHistory.timestamp.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if not row:
+        return None
+    return getattr(row, field)
 
-def task_to_out(task: Task) -> TaskOut:
+
+def _task_messages(task: Task, db: Session) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    daily_prev = _latest_history(task, db, "daily_done")
+    weekly_prev = _latest_history(task, db, "weekly_done")
+    monthly_prev = _latest_history(task, db, "monthly_done")
+    daily_msg = None
+    weekly_msg = None
+    monthly_msg = None
+    if daily_prev is not None:
+        daily_msg = (
+            "어제는 숙제를 다 했어요! 오늘도 화이팅!"
+            if daily_prev
+            else "어제는 숙제를 다 못 했네요. 오늘은 화이팅!"
+        )
+    if weekly_prev is not None:
+        weekly_msg = (
+            "지난 주 숙제도 완료! 이번 주도 화이팅!"
+            if weekly_prev
+            else "지난 주는 숙제를 다 못 했네요. 이번 주는 화이팅!"
+        )
+    if monthly_prev is not None:
+        monthly_msg = (
+            "지난 달 숙제 클리어! 이번 달도 화이팅!"
+            if monthly_prev
+            else "지난 달은 숙제를 다 못 했네요. 이번 달은 화이팅!"
+        )
+    return daily_msg, weekly_msg, monthly_msg
+
+
+def task_to_out(task: Task, db: Session) -> TaskOut:
     lists = _task_lists(task)
     states = _task_states(task, lists)
+    daily_msg, weekly_msg, monthly_msg = _task_messages(task, db)
     return TaskOut(
         id=task.id,
         game_id=task.game_id,
@@ -1664,6 +1730,9 @@ def task_to_out(task: Task) -> TaskOut:
         daily_state=states[0],
         weekly_state=states[1],
         monthly_state=states[2],
+        daily_message=daily_msg,
+        weekly_message=weekly_msg,
+        monthly_message=monthly_msg,
     )
 
 
