@@ -120,7 +120,7 @@ a:hover { text-decoration: underline; }
   padding: 6px 8px;
 }
 .alert-toggle.accent {
-  color: #1d4ed8;
+  color: #111;
 }
 .alert-toggle.accent[aria-expanded="true"] {
   color: #fff;
@@ -130,6 +130,7 @@ a:hover { text-decoration: underline; }
   font-weight: 600;
   white-space: pre-line;
 }
+.refresh-list span { color: #111; }
 .refresh-list .today { color: #1d4ed8; font-weight: 700; }
 .alert-line.accent { color: #1d4ed8; }
 
@@ -216,6 +217,7 @@ a:hover { text-decoration: underline; }
   display: flex;
   gap: 4px;
   width: 100%;
+  flex-wrap: wrap;
 }
 .task-badges .badge {
   display: inline-flex;

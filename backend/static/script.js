@@ -1,7 +1,7 @@
 const state = {
   games: [],
   selected: null,
-  currencyFilter: "ALL",
+  currencyFilter: null,
   view: "gallery",
   canEdit: false,
   alerts: null,
@@ -247,10 +247,10 @@ function renderAlerts() {
       count > 0
         ? `📢 내일 주간 초기화되는 게임은 ${count}개입니다.`
         : "내일 주간 초기화되는 게임이 없어요.";
-    refreshLine.disabled = !(refresh_by_day?.length && count > 0);
+    refreshLine.disabled = !(refresh_by_day?.length);
     refreshLine.setAttribute(
       "aria-expanded",
-      refresh_by_day?.length && count > 0 ? String(state.refreshAlertsExpanded) : "false"
+      refresh_by_day?.length ? String(state.refreshAlertsExpanded) : "false"
     );
   }
   if (refreshList) {
@@ -324,7 +324,7 @@ async function selectGame(gameId) {
   const game = state.games.find((g) => g.id === gameId);
   if (!game) return;
   state.selected = game;
-  state.currencyFilter = "ALL";
+  state.currencyFilter = null;
   state.characterFilter = { level: "", grade: "", overpower: "", position: "" };
   state.characters = [];
   state.spendingDraft = {};
@@ -969,15 +969,9 @@ function renderTasks() {
 function renderCurrencyFilters(currencies) {
   const row = el("currency-filters");
   row.innerHTML = "";
-  const allChip = document.createElement("button");
-  allChip.className = "chip" + (state.currencyFilter === "ALL" ? " active" : "");
-  allChip.textContent = "전체";
-  allChip.onclick = () => {
-    state.currencyFilter = "ALL";
-    renderCurrencyFilters(currencies);
-    if (state.selected) loadCurrencyChart(state.selected.id);
-  };
-  row.appendChild(allChip);
+  if (!state.currencyFilter && currencies?.length) {
+    state.currencyFilter = currencies[0].title;
+  }
   currencies.forEach((c) => {
     const chip = document.createElement("button");
     chip.className = "chip" + (state.currencyFilter === c.title ? " active" : "");
@@ -997,10 +991,8 @@ async function loadCurrencyChart(gameId) {
     weeks: "15",
     start_date: "2025-11-22",
   });
-  const titles =
-    state.currencyFilter === "ALL"
-      ? state.currencies.map((c) => c.title)
-      : [state.currencyFilter];
+  const titles = state.currencyFilter ? [state.currencyFilter] : state.currencies.map((c) => c.title).slice(0, 1);
+  if (!titles.length) return;
   const series = await Promise.all(
     titles.map((title) => {
       const params = new URLSearchParams(base.toString());
