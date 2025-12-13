@@ -1,4 +1,4 @@
-const CACHE_NAME = "dashboard-cache-v31";
+const CACHE_NAME = "dashboard-cache-v32";
 const ASSETS = [
   "/",
   "/static/index.html",

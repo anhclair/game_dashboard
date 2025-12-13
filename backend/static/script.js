@@ -243,7 +243,10 @@ function renderAlerts() {
     const tomorrowList =
       refresh_by_day?.find((row) => row.weekday === tomorrowDay)?.titles || [];
     const count = tomorrowList.length;
-    refreshLine.textContent = `📢 내일 주간 초기화되는 게임은 ${count}개입니다.`;
+    refreshLine.textContent =
+      count > 0
+        ? `📢 내일 주간 초기화되는 게임은 ${count}개입니다.`
+        : "📢 내일 주간 초기화되는 게임이 없어요.";
     refreshLine.disabled = !(refresh_by_day?.length);
     refreshLine.setAttribute(
       "aria-expanded",
@@ -986,7 +989,6 @@ async function loadCurrencyChart(gameId) {
   const base = new URLSearchParams({
     weekly: "true",
     weeks: "15",
-    start_date: "2025-11-22",
   });
   const titles = state.currencyFilter ? [state.currencyFilter] : state.currencies.map((c) => c.title).slice(0, 1);
   if (!titles.length) return;
