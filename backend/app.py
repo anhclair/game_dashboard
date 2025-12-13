@@ -408,7 +408,7 @@ def _encode_state(values: List[bool]) -> str:
 
 def _spending_reward_mode(spending: "Spending") -> str:
     mode = (spending.reward_mode or "").upper()
-    if mode in {"DAILY", "ONCE"}:
+    if mode in {"DAILY", "ONCE", "DISABLED"}:
         return mode
     text = (spending.type or "").lower()
     if "패스" in text:
@@ -1485,6 +1485,9 @@ def dashboard_alerts(db: Session = Depends(get_db)):
     ).all()
     spending_due = []
     for spending, game_title in spending_rows:
+        mode = _spending_reward_mode(spending)
+        if mode == "DISABLED":
+            continue
         if spending.remain_date <= 3:
             spending_due.append(
                 SpendingAlertOut(
@@ -1941,8 +1944,8 @@ def configure_spending(
         raise HTTPException(status_code=404, detail="Spending not found")
     if payload.reward_mode:
         mode = payload.reward_mode.upper()
-        if mode not in {"DAILY", "ONCE"}:
-            raise HTTPException(status_code=400, detail="reward_mode must be DAILY or ONCE")
+        if mode not in {"DAILY", "ONCE", "DISABLED"}:
+            raise HTTPException(status_code=400, detail="reward_mode must be DAILY, ONCE, or DISABLED")
         spending.reward_mode = mode
     if payload.rewards is not None:
         spending.reward_items = encode_reward_list(payload.rewards)
@@ -1959,6 +1962,10 @@ def configure_spending(
     if spending.pass_max_level and spending.pass_current_level:
         if spending.pass_current_level > spending.pass_max_level:
             raise HTTPException(status_code=400, detail="pass_current_level cannot exceed pass_max_level")
+    if spending.reward_mode and spending.reward_mode.upper() == "DISABLED":
+        spending.reward_items = encode_reward_list([])
+        spending.reward_once_granted = False
+        spending.last_reward_at = None
     db.commit()
     db.refresh(spending)
     return _spending_to_out(spending)
@@ -2224,6 +2231,8 @@ def _apply_spending_rewards(game: Game, db: Session) -> bool:
     today = today_local()
     for sp in spendings:
         mode = _spending_reward_mode(sp)
+        if mode == "DISABLED":
+            continue
         rewards = _spending_rewards(sp)
         if not rewards:
             continue

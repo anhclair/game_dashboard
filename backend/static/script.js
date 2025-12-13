@@ -190,7 +190,7 @@ function renderAlerts() {
     line1.textContent =
       ongoing_count > 0
         ? `📢 현재 ${ongoing_count}개의 이벤트가 진행 중이에요!`
-        : "오늘은 진행 중인 이벤트가 없어요.";
+        : "현재 진행 중인 이벤트가 없어요.";
     line1.disabled = !canToggle;
     line1.setAttribute("aria-expanded", canToggle ? String(state.alertsExpanded) : "false");
   }
@@ -218,7 +218,7 @@ function renderAlerts() {
     spendingLine.textContent =
       spendingCount > 0
         ? `📢 현재 ${spendingCount}개의 과금 확인이 필요해요.`
-        : "과금 확인이 필요한 항목이 없어요.";
+        : "현재 확인 필요한 과금 사항이 없어요.";
     spendingLine.disabled = !canToggleSpending;
     spendingLine.setAttribute(
       "aria-expanded",
@@ -243,11 +243,14 @@ function renderAlerts() {
     const tomorrowList =
       refresh_by_day?.find((row) => row.weekday === tomorrowDay)?.titles || [];
     const count = tomorrowList.length;
-    refreshLine.textContent = `📢 내일 주간 초기화되는 게임은 ${count}개입니다.`;
-    refreshLine.disabled = !refresh_by_day?.length;
+    refreshLine.textContent =
+      count > 0
+        ? `📢 내일 주간 초기화되는 게임은 ${count}개입니다.`
+        : "내일 주간 초기화되는 게임이 없어요.";
+    refreshLine.disabled = !(refresh_by_day?.length && count > 0);
     refreshLine.setAttribute(
       "aria-expanded",
-      refresh_by_day?.length ? String(state.refreshAlertsExpanded) : "false"
+      refresh_by_day?.length && count > 0 ? String(state.refreshAlertsExpanded) : "false"
     );
   }
   if (refreshList) {
@@ -459,18 +462,19 @@ async function loadSpending(gameId) {
       mode === "ONCE" && (s.pass_current_level || s.pass_max_level)
         ? `패스 레벨 ${s.pass_current_level ?? "-"} / ${s.pass_max_level ?? "-"}`
         : "";
+    const disabledMode = draft.reward_mode === "DISABLED" || mode === "DISABLED";
     item.innerHTML = `
       <div class="row space-between spending-row">
         <div class="spending-info">
           <h4>${s.title}</h4>
           <p class="meta">${s.paying} • ${s.type}</p>
-          <p class="meta">남은 ${s.remain_date}일 / ${s.is_repaying}</p>
-          <p class="meta">보상: ${summaryRewards || "미설정"}</p>
-          ${passMeta ? `<p class="meta">${passMeta}</p>` : ""}
+          <p class="meta">${disabledMode ? "사용 안함" : `남은 ${s.remain_date}일 / ${s.is_repaying}`}</p>
+          <p class="meta">${disabledMode ? "보상: 사용 안함" : `보상: ${summaryRewards || "미설정"}`}</p>
+          ${passMeta && !disabledMode ? `<p class="meta">${passMeta}</p>` : ""}
         </div>
         <div class="row compact spending-actions">
-          <input type="date" value="${s.paying_date}" data-id="${s.id}">
-          <button data-id="${s.id}">상품 추가구매</button>
+          <input type="date" value="${s.paying_date}" data-id="${s.id}" ${disabledMode ? "disabled" : ""}>
+          <button data-id="${s.id}" ${disabledMode ? "disabled" : ""}>상품 추가구매</button>
           <button class="ghost small-btn" data-edit="${s.id}">${editing ? "편집 취소" : "구성 수정"}</button>
         </div>
       </div>
@@ -515,10 +519,11 @@ async function loadSpending(gameId) {
       const modeRow = document.createElement("div");
       modeRow.className = "row compact";
       const modeSelect = document.createElement("select");
-      ["DAILY", "ONCE"].forEach((val) => {
+      ["DAILY", "ONCE", "DISABLED"].forEach((val) => {
         const opt = document.createElement("option");
         opt.value = val;
-        opt.textContent = val === "DAILY" ? "월정액(매일 지급)" : "패스(1회 지급)";
+        opt.textContent =
+          val === "DAILY" ? "월정액(매일 지급)" : val === "ONCE" ? "패스(1회 지급)" : "사용하지 않음";
         if (draft.reward_mode === val) opt.selected = true;
         modeSelect.appendChild(opt);
       });
@@ -530,6 +535,12 @@ async function loadSpending(gameId) {
 
       const rewardWrap = document.createElement("div");
       rewardWrap.className = "stack";
+      if (draft.reward_mode === "DISABLED") {
+        const note = document.createElement("p");
+        note.className = "meta";
+        note.textContent = "사용하지 않음: 일자 체크/보상 지급/알림 제외";
+        rewardWrap.appendChild(note);
+      }
       const passWrap = document.createElement("div");
       passWrap.className = "row compact";
       if (draft.reward_mode === "ONCE") {
@@ -551,53 +562,55 @@ async function loadSpending(gameId) {
         passWrap.appendChild(max);
         editor.appendChild(passWrap);
       }
-      (draft.rewards || []).forEach((rw, ridx) => {
-        const rrow = document.createElement("div");
-        rrow.className = "row compact";
-        const select = document.createElement("select");
-        const defaultOpt = document.createElement("option");
-        defaultOpt.value = "";
-        defaultOpt.textContent = "재화 선택";
-        select.appendChild(defaultOpt);
-        (state.currencies || []).forEach((c) => {
-          const opt = document.createElement("option");
-          opt.value = c.title;
-          opt.textContent = c.title;
-          if (c.title === rw.title) opt.selected = true;
-          select.appendChild(opt);
+      if (draft.reward_mode !== "DISABLED") {
+        (draft.rewards || []).forEach((rw, ridx) => {
+          const rrow = document.createElement("div");
+          rrow.className = "row compact";
+          const select = document.createElement("select");
+          const defaultOpt = document.createElement("option");
+          defaultOpt.value = "";
+          defaultOpt.textContent = "재화 선택";
+          select.appendChild(defaultOpt);
+          (state.currencies || []).forEach((c) => {
+            const opt = document.createElement("option");
+            opt.value = c.title;
+            opt.textContent = c.title;
+            if (c.title === rw.title) opt.selected = true;
+            select.appendChild(opt);
+          });
+          select.value = rw.title || "";
+          select.addEventListener("change", () => {
+            draft.rewards[ridx].title = select.value;
+          });
+          const input = document.createElement("input");
+          input.type = "number";
+          input.value = rw.count ?? 0;
+          input.addEventListener("input", () => {
+            draft.rewards[ridx].count = Number(input.value || 0);
+          });
+          const delBtn = document.createElement("button");
+          delBtn.type = "button";
+          delBtn.textContent = "삭제";
+          delBtn.className = "ghost small-btn";
+          delBtn.addEventListener("click", () => {
+            draft.rewards.splice(ridx, 1);
+            loadSpending(gameId);
+          });
+          rrow.appendChild(select);
+          rrow.appendChild(input);
+          rrow.appendChild(delBtn);
+          rewardWrap.appendChild(rrow);
         });
-        select.value = rw.title || "";
-        select.addEventListener("change", () => {
-          draft.rewards[ridx].title = select.value;
-        });
-        const input = document.createElement("input");
-        input.type = "number";
-        input.value = rw.count ?? 0;
-        input.addEventListener("input", () => {
-          draft.rewards[ridx].count = Number(input.value || 0);
-        });
-        const delBtn = document.createElement("button");
-        delBtn.type = "button";
-        delBtn.textContent = "삭제";
-        delBtn.className = "ghost small-btn";
-        delBtn.addEventListener("click", () => {
-          draft.rewards.splice(ridx, 1);
+        const addReward = document.createElement("button");
+        addReward.type = "button";
+        addReward.textContent = "보상 추가";
+        addReward.className = "ghost small-btn";
+        addReward.addEventListener("click", () => {
+          draft.rewards.push({ title: state.currencies?.[0]?.title || "", count: 0 });
           loadSpending(gameId);
         });
-        rrow.appendChild(select);
-        rrow.appendChild(input);
-        rrow.appendChild(delBtn);
-        rewardWrap.appendChild(rrow);
-      });
-      const addReward = document.createElement("button");
-      addReward.type = "button";
-      addReward.textContent = "보상 추가";
-      addReward.className = "ghost small-btn";
-      addReward.addEventListener("click", () => {
-        draft.rewards.push({ title: state.currencies?.[0]?.title || "", count: 0 });
-        loadSpending(gameId);
-      });
-      rewardWrap.appendChild(addReward);
+        rewardWrap.appendChild(addReward);
+      }
       editor.appendChild(rewardWrap);
 
       const saveRow = document.createElement("div");
@@ -611,9 +624,15 @@ async function loadSpending(gameId) {
             method: "POST",
             body: JSON.stringify({
               reward_mode: draft.reward_mode,
-              rewards: draft.rewards,
-              pass_current_level: draft.pass_current_level === "" ? null : Number(draft.pass_current_level),
-              pass_max_level: draft.pass_max_level === "" ? null : Number(draft.pass_max_level),
+              rewards: draft.reward_mode === "DISABLED" ? [] : draft.rewards,
+              pass_current_level:
+                draft.reward_mode === "ONCE" && draft.pass_current_level !== ""
+                  ? Number(draft.pass_current_level)
+                  : null,
+              pass_max_level:
+                draft.reward_mode === "ONCE" && draft.pass_max_level !== ""
+                  ? Number(draft.pass_max_level)
+                  : null,
             }),
           });
           state.spendingEdit[s.id] = false;
