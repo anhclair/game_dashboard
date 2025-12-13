@@ -1009,7 +1009,7 @@ function drawChart(canvas, series) {
   const h = canvas.height = 200;
   ctx.clearRect(0,0,w,h);
   if (!series || series.length === 0) return;
-  const allBuckets = series.flatMap((s) => s.buckets || []);
+  const allBuckets = series.flatMap((s) => (s.buckets || []).slice().reverse());
   const valid = allBuckets.filter((b) => b.count !== null && b.count !== undefined);
   if (valid.length === 0) return;
   const counts = valid.map((b) => b.count);
@@ -1027,6 +1027,7 @@ function drawChart(canvas, series) {
   ctx.stroke();
   const colors = ["#4338ca", "#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"];
   series.forEach((s, idx) => {
+    const buckets = (s.buckets || []).slice().reverse();
     const color = colors[idx % colors.length];
     ctx.strokeStyle = color;
     ctx.lineWidth = 2;
@@ -1034,7 +1035,7 @@ function drawChart(canvas, series) {
     const points = [];
     let lastCount = null;
     let lastY = null;
-    (s.buckets || []).forEach((b, i) => {
+    buckets.forEach((b, i) => {
       const x = pad + stepX * i;
       const val = b.count === null || b.count === undefined ? lastCount : b.count;
       if (val === null || val === undefined) {
