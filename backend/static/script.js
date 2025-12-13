@@ -16,6 +16,7 @@ const state = {
   adminToken: null,
   alertsExpanded: false,
   spendingAlertsExpanded: false,
+  refreshAlertsExpanded: false,
   characterFilter: {
     level: "",
     grade: "",
@@ -126,6 +127,7 @@ async function loadAlerts() {
     state.alerts = alerts;
     state.alertsExpanded = false;
     state.spendingAlertsExpanded = false;
+    state.refreshAlertsExpanded = false;
     renderAlerts();
   } catch (err) {
     console.error("alert load failed", err);
@@ -162,6 +164,12 @@ function toggleSpendingAlerts() {
   renderAlerts();
 }
 
+function toggleRefreshAlerts() {
+  if (!state.alerts?.refresh_by_day?.length) return;
+  state.refreshAlertsExpanded = !state.refreshAlertsExpanded;
+  renderAlerts();
+}
+
 function renderAlerts() {
   const banner = el("alert-banner");
   if (!banner) return;
@@ -169,12 +177,13 @@ function renderAlerts() {
     banner.classList.add("hidden");
     return;
   }
-  const { ongoing_count, ongoing_events, tomorrow_refresh_titles } = state.alerts;
+  const { ongoing_count, ongoing_events, refresh_by_day } = state.alerts;
   const line1 = el("alert-line1");
   const line2 = el("alert-line2");
   const spendingLine = el("alert-spending-line");
   const spendingList = el("alert-spending-list");
-  const line3 = el("alert-line3");
+  const refreshLine = el("alert-refresh-line");
+  const refreshList = el("alert-refresh-list");
   const canToggle = canToggleAlerts();
   const canToggleSpending = canToggleSpendingAlerts();
   if (line1) {
@@ -228,12 +237,36 @@ function renderAlerts() {
       spendingList.classList.add("hidden");
     }
   }
-  if (line3) {
-    const refreshText =
-      tomorrow_refresh_titles && tomorrow_refresh_titles.length
-        ? `📢 내일은 ${tomorrow_refresh_titles.join(", ")} 주간 초기화되는 날! 숙제 확인!`
-        : "내일은 주간 초기화되는 게임이 없어요.";
-    line3.textContent = refreshText;
+  if (refreshLine) {
+    const today = new Date();
+    const tomorrowDay = ((today.getDay() + 1) % 7) + 1; // JS getDay: Sun=0
+    const tomorrowList =
+      refresh_by_day?.find((row) => row.weekday === tomorrowDay)?.titles || [];
+    const count = tomorrowList.length;
+    refreshLine.textContent = `📢 내일 주간 초기화되는 게임은 ${count}개입니다.`;
+    refreshLine.disabled = !refresh_by_day?.length;
+    refreshLine.setAttribute(
+      "aria-expanded",
+      refresh_by_day?.length ? String(state.refreshAlertsExpanded) : "false"
+    );
+  }
+  if (refreshList) {
+    if (refresh_by_day?.length) {
+      const weekdayLabels = ["", "일요일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일"];
+      const today = new Date();
+      const tomorrowDay = ((today.getDay() + 1) % 7) + 1;
+      const lines = refresh_by_day.map((row) => {
+        const label = weekdayLabels[row.weekday] || "-";
+        const items = row.titles.length ? row.titles.join(", ") : "없음";
+        const cls = row.weekday === tomorrowDay ? "today" : "";
+        return `<span class="${cls}">${label}: ${items}</span>`;
+      });
+      refreshList.innerHTML = lines.join("<br>");
+      refreshList.classList.toggle("hidden", !state.refreshAlertsExpanded);
+    } else {
+      refreshList.textContent = "";
+      refreshList.classList.add("hidden");
+    }
   }
   banner.classList.remove("hidden");
 }
@@ -1221,6 +1254,16 @@ function wireActions() {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         toggleSpendingAlerts();
+      }
+    });
+  }
+  const refreshToggle = el("alert-refresh-line");
+  if (refreshToggle) {
+    refreshToggle.addEventListener("click", () => toggleRefreshAlerts());
+    refreshToggle.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        toggleRefreshAlerts();
       }
     });
   }

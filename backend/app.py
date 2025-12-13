@@ -1173,12 +1173,9 @@ class SpendingAlertOut(BaseModel):
     remain_date: int
 
 
-class DashboardAlert(BaseModel):
-    ongoing_count: int
-    ongoing_events: List[EventAlertOut]
-    tomorrow_refresh_titles: List[str]
-    spending_due_count: int
-    spending_due: List[SpendingAlertOut]
+class RefreshDayOut(BaseModel):
+    weekday: int
+    titles: List[str]
 
 
 class DashboardAlert(BaseModel):
@@ -1187,6 +1184,16 @@ class DashboardAlert(BaseModel):
     tomorrow_refresh_titles: List[str]
     spending_due_count: int
     spending_due: List[SpendingAlertOut]
+    refresh_by_day: List[RefreshDayOut]
+
+
+class DashboardAlert(BaseModel):
+    ongoing_count: int
+    ongoing_events: List[EventAlertOut]
+    tomorrow_refresh_titles: List[str]
+    spending_due_count: int
+    spending_due: List[SpendingAlertOut]
+    refresh_by_day: List[RefreshDayOut]
 
 
 class SpendingOut(BaseModel):
@@ -1487,15 +1494,18 @@ def dashboard_alerts(db: Session = Depends(get_db)):
                 )
             )
 
+    refresh_map: dict[int, List[str]] = {i: [] for i in range(1, 8)}
+    for g in games:
+        refresh_day, _ = _game_refresh_info(g)
+        if refresh_day:
+            refresh_map.setdefault(refresh_day, []).append(g.title)
+    for titles in refresh_map.values():
+        titles.sort()
+
     tomorrow = today + dt.timedelta(days=1)
     # convert python weekday (Mon=0) to desired format (Sun=1)
     tomorrow_day = ((tomorrow.weekday() + 1) % 7) + 1
-    refresh_titles: List[str] = []
-    for g in games:
-        refresh_day, _ = _game_refresh_info(g)
-        if refresh_day == tomorrow_day:
-            refresh_titles.append(g.title)
-    refresh_titles.sort()
+    refresh_titles: List[str] = refresh_map.get(tomorrow_day, [])
 
     return DashboardAlert(
         ongoing_count=len(ongoing),
@@ -1503,6 +1513,10 @@ def dashboard_alerts(db: Session = Depends(get_db)):
         tomorrow_refresh_titles=refresh_titles,
         spending_due_count=len(spending_due),
         spending_due=spending_due,
+        refresh_by_day=[
+          RefreshDayOut(weekday=day, titles=titles)
+          for day, titles in sorted(refresh_map.items(), key=lambda x: x[0])
+        ],
     )
 
 
