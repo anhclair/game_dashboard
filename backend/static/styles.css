@@ -33,6 +33,27 @@ a:hover { text-decoration: underline; }
   gap: 8px;
   position: relative;
 }
+.auth-panel {
+  position: absolute;
+  top: 42px;
+  right: 0;
+  width: 260px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 10px;
+  box-shadow: 0 8px 24px rgba(17,24,39,0.12);
+  z-index: 6;
+}
+.auth-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 13px;
+}
+.auth-panel input[type="password"] { width: 100%; }
+.auth-panel .inline-check { margin: 2px 0 6px; }
 .icon-btn {
   background: #f3f4f6;
   color: #111;
@@ -77,6 +98,18 @@ a:hover { text-decoration: underline; }
   padding: 12px 16px;
   margin: 0 0 16px;
 }
+.alert-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+.alert-toggle:disabled {
+  cursor: default;
+  opacity: 0.8;
+}
 .alert-line {
   margin: 4px 0;
   font-weight: 600;
@@ -118,9 +151,10 @@ a:hover { text-decoration: underline; }
 .card-body {
   padding: 10px 12px 12px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
+  flex-wrap: wrap;
 }
 .card-title-row {
   display: flex;
@@ -158,6 +192,7 @@ a:hover { text-decoration: underline; }
   margin-top: 6px;
   display: flex;
   gap: 4px;
+  width: 100%;
 }
 .task-badges .badge {
   display: inline-flex;
@@ -316,6 +351,14 @@ a:hover { text-decoration: underline; }
   padding: 10px;
   background: #fafafa;
 }
+.spending-row {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.spending-info { flex: 1 1 240px; min-width: 220px; }
+.spending-actions { flex: 0 1 260px; justify-content: flex-end; }
+.spending-actions input { min-width: 150px; }
 .list-item h4 {
   margin: 0 0 4px 0;
   font-size: 13px;

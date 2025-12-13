@@ -22,6 +22,7 @@ const state = {
   },
   characterOptions: { grades: [], positions: [] },
   currencies: [],
+  alertsExpanded: false,
 };
 
 const IMAGE_FILES = {
@@ -34,6 +35,8 @@ const IMAGE_FILES = {
   "던파 모바일": { dir: "MDNF", icon: "icon.jpg", profile: "profile.png" },
   "헤이즈 리버브": { dir: "HAZREVERB", icon: "icon.webp", profile: "profile.png" },
 };
+
+const AUTH_TOKEN_KEY = "dashboard-admin-token";
 
 function imagePath(title, type) {
   const info = IMAGE_FILES[title];
@@ -120,10 +123,26 @@ async function loadAlerts() {
   try {
     const alerts = await fetchJSON("/dashboard/alerts");
     state.alerts = alerts;
+    state.alertsExpanded = false;
     renderAlerts();
   } catch (err) {
     console.error("alert load failed", err);
   }
+}
+
+function canToggleAlerts() {
+  return Boolean(
+    state.alerts &&
+      state.alerts.ongoing_count > 0 &&
+      state.alerts.ongoing_events &&
+      state.alerts.ongoing_events.length
+  );
+}
+
+function toggleAlertsList() {
+  if (!canToggleAlerts()) return;
+  state.alertsExpanded = !state.alertsExpanded;
+  renderAlerts();
 }
 
 function renderAlerts() {
@@ -137,14 +156,17 @@ function renderAlerts() {
   const line1 = el("alert-line1");
   const line2 = el("alert-line2");
   const line3 = el("alert-line3");
+  const canToggle = canToggleAlerts();
   if (line1) {
     line1.textContent =
       ongoing_count > 0
         ? `📢 현재 ${ongoing_count}개의 이벤트가 진행 중이에요!`
         : "오늘은 진행 중인 이벤트가 없어요.";
+    line1.disabled = !canToggle;
+    line1.setAttribute("aria-expanded", canToggle ? String(state.alertsExpanded) : "false");
   }
   if (line2) {
-    if (ongoing_count > 0 && ongoing_events?.length) {
+    if (canToggle) {
       const order = [];
       const counts = {};
       ongoing_events.forEach((ev) => {
@@ -156,7 +178,7 @@ function renderAlerts() {
       });
       const list = order.map((title) => `${title}, ${counts[title]}개`).join("\n");
       line2.textContent = list;
-      line2.classList.remove("hidden");
+      line2.classList.toggle("hidden", !state.alertsExpanded);
     } else {
       line2.textContent = "";
       line2.classList.add("hidden");
@@ -361,15 +383,15 @@ async function loadSpending(gameId) {
         ? `패스 레벨 ${s.pass_current_level ?? "-"} / ${s.pass_max_level ?? "-"}`
         : "";
     item.innerHTML = `
-      <div class="row space-between">
-        <div>
+      <div class="row space-between spending-row">
+        <div class="spending-info">
           <h4>${s.title}</h4>
           <p class="meta">${s.paying} • ${s.type}</p>
           <p class="meta">남은 ${s.remain_date}일 / ${s.is_repaying}</p>
           <p class="meta">보상: ${summaryRewards || "미설정"}</p>
           ${passMeta ? `<p class="meta">${passMeta}</p>` : ""}
         </div>
-        <div class="row compact">
+        <div class="row compact spending-actions">
           <input type="date" value="${s.paying_date}" data-id="${s.id}">
           <button data-id="${s.id}">상품 추가구매</button>
           <button class="ghost small-btn" data-edit="${s.id}">${editing ? "편집 취소" : "구성 수정"}</button>
@@ -1129,7 +1151,7 @@ function renderCharacters() {
 
 function renderVersion() {
   const today = new Date().toISOString().slice(0, 10);
-  const text = `최초 발행 2025-12-07, 업데이트 ${today}, 현재 버전 v.1.2.0`;
+  const text = `최초 발행 2025-12-07, 업데이트 ${today}, 현재 버전 v.1.2.1`;
   const versionMain = el("version-text-main");
   if (versionMain) versionMain.textContent = text;
 }
@@ -1138,29 +1160,81 @@ function wireActions() {
   el("btn-back-main").addEventListener("click", () => {
     showView("gallery");
   });
+  const alertToggle = el("alert-line1");
+  if (alertToggle) {
+    alertToggle.addEventListener("click", () => toggleAlertsList());
+    alertToggle.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        toggleAlertsList();
+      }
+    });
+  }
   const authToggle = el("auth-toggle");
+  const authPanel = el("auth-panel");
+  const authForm = el("auth-form");
+  const authInput = el("auth-input");
+  const authRemember = el("auth-remember");
+  const authCancel = el("auth-cancel");
+  const hideAuthPanel = () => authPanel?.classList.add("hidden");
+  const showAuthPanel = () => {
+    if (!authPanel) return;
+    authPanel.classList.remove("hidden");
+    if (authInput) {
+      authInput.value = "";
+      authInput.focus();
+    }
+    if (authRemember) {
+      authRemember.checked = Boolean(localStorage.getItem(AUTH_TOKEN_KEY));
+    }
+  };
   authToggle.addEventListener("click", async () => {
     if (state.canEdit) {
       state.adminToken = null;
-      sessionStorage.removeItem("dashboard-admin-token");
+      sessionStorage.removeItem(AUTH_TOKEN_KEY);
+      localStorage.removeItem(AUTH_TOKEN_KEY);
       setEditMode(false);
       return;
     }
-    const val = prompt("편집 모드 암호를 입력하세요.");
-    if (!val) return;
-    const token = val.trim();
-    try {
-      await fetchJSON("/auth/verify", { headers: { "X-Admin-Token": token } });
-      state.adminToken = token;
-      sessionStorage.setItem("dashboard-admin-token", token);
-      setEditMode(true);
-    } catch {
-      state.adminToken = null;
-      sessionStorage.removeItem("dashboard-admin-token");
-      setEditMode(false);
-      alert("암호가 올바르지 않습니다. 뷰어 권한으로 전환됩니다.");
-    }
+    if (authPanel?.classList.contains("hidden")) showAuthPanel();
+    else hideAuthPanel();
   });
+  if (authCancel) {
+    authCancel.addEventListener("click", () => hideAuthPanel());
+  }
+  if (authForm) {
+    authForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (!authInput) return;
+      const token = authInput.value.trim();
+      if (!token) return;
+      const remember = Boolean(authRemember?.checked);
+      const submitBtn = el("auth-submit");
+      submitBtn?.setAttribute("disabled", "true");
+      submitBtn?.classList.add("disabled-btn");
+      try {
+        await fetchJSON("/auth/verify", { headers: { "X-Admin-Token": token } });
+        state.adminToken = token;
+        sessionStorage.setItem(AUTH_TOKEN_KEY, token);
+        if (remember) {
+          localStorage.setItem(AUTH_TOKEN_KEY, token);
+        } else {
+          localStorage.removeItem(AUTH_TOKEN_KEY);
+        }
+        setEditMode(true);
+        hideAuthPanel();
+      } catch {
+        state.adminToken = null;
+        sessionStorage.removeItem(AUTH_TOKEN_KEY);
+        if (!remember) localStorage.removeItem(AUTH_TOKEN_KEY);
+        setEditMode(false);
+        alert("암호가 올바르지 않습니다. 뷰어 권한으로 전환됩니다.");
+      } finally {
+        submitBtn?.removeAttribute("disabled");
+        submitBtn?.classList.remove("disabled-btn");
+      }
+    });
+  }
 
   el("btn-end-game").addEventListener("click", async () => {
     if (!state.canEdit) {
@@ -1342,7 +1416,7 @@ function setEditMode(canEdit) {
 }
 
 async function restoreAuth() {
-  const token = sessionStorage.getItem("dashboard-admin-token");
+  const token = sessionStorage.getItem(AUTH_TOKEN_KEY) || localStorage.getItem(AUTH_TOKEN_KEY);
   if (!token) {
     setEditMode(false);
     return;
@@ -1353,7 +1427,8 @@ async function restoreAuth() {
     setEditMode(true);
   } catch {
     state.adminToken = null;
-    sessionStorage.removeItem("dashboard-admin-token");
+    sessionStorage.removeItem(AUTH_TOKEN_KEY);
+    localStorage.removeItem(AUTH_TOKEN_KEY);
     setEditMode(false);
   }
 }

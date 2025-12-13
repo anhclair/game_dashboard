@@ -18,13 +18,29 @@
       </div>
       <div class="topbar-right">
         <button id="auth-toggle" class="pill small muted">뷰어</button>
+        <div id="auth-panel" class="auth-panel hidden">
+          <form id="auth-form" class="stack">
+            <label class="auth-label">
+              <span>편집 암호</span>
+              <input type="password" id="auth-input" placeholder="편집 암호를 입력하세요" autocomplete="current-password">
+            </label>
+            <label class="inline-check">
+              <input type="checkbox" id="auth-remember">
+              <span>이 기기 기억하기</span>
+            </label>
+            <div class="row compact">
+              <button type="submit" id="auth-submit" class="small-btn">확인</button>
+              <button type="button" id="auth-cancel" class="ghost small-btn">취소</button>
+            </div>
+          </form>
+        </div>
       </div>
     </header>
 
     <main class="layout">
       <section class="alert-banner hidden" id="alert-banner">
-        <p class="alert-line" id="alert-line1"></p>
-        <p class="alert-line" id="alert-line2"></p>
+        <button class="alert-line alert-toggle" id="alert-line1" type="button"></button>
+        <p class="alert-line hidden" id="alert-line2"></p>
         <p class="alert-line accent" id="alert-line3"></p>
       </section>
 
