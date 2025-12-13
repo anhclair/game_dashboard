@@ -14,6 +14,8 @@ const state = {
   spendingDraft: {},
   spendingEdit: {},
   adminToken: null,
+  alertsExpanded: false,
+  spendingAlertsExpanded: false,
   characterFilter: {
     level: "",
     grade: "",
@@ -22,7 +24,6 @@ const state = {
   },
   characterOptions: { grades: [], positions: [] },
   currencies: [],
-  alertsExpanded: false,
 };
 
 const IMAGE_FILES = {
@@ -124,6 +125,7 @@ async function loadAlerts() {
     const alerts = await fetchJSON("/dashboard/alerts");
     state.alerts = alerts;
     state.alertsExpanded = false;
+    state.spendingAlertsExpanded = false;
     renderAlerts();
   } catch (err) {
     console.error("alert load failed", err);
@@ -145,6 +147,21 @@ function toggleAlertsList() {
   renderAlerts();
 }
 
+function canToggleSpendingAlerts() {
+  return Boolean(
+    state.alerts &&
+      state.alerts.spending_due_count > 0 &&
+      state.alerts.spending_due &&
+      state.alerts.spending_due.length
+  );
+}
+
+function toggleSpendingAlerts() {
+  if (!canToggleSpendingAlerts()) return;
+  state.spendingAlertsExpanded = !state.spendingAlertsExpanded;
+  renderAlerts();
+}
+
 function renderAlerts() {
   const banner = el("alert-banner");
   if (!banner) return;
@@ -155,8 +172,11 @@ function renderAlerts() {
   const { ongoing_count, ongoing_events, tomorrow_refresh_titles } = state.alerts;
   const line1 = el("alert-line1");
   const line2 = el("alert-line2");
+  const spendingLine = el("alert-spending-line");
+  const spendingList = el("alert-spending-list");
   const line3 = el("alert-line3");
   const canToggle = canToggleAlerts();
+  const canToggleSpending = canToggleSpendingAlerts();
   if (line1) {
     line1.textContent =
       ongoing_count > 0
@@ -182,6 +202,30 @@ function renderAlerts() {
     } else {
       line2.textContent = "";
       line2.classList.add("hidden");
+    }
+  }
+  if (spendingLine) {
+    const spendingCount = state.alerts.spending_due_count || 0;
+    spendingLine.textContent =
+      spendingCount > 0
+        ? `📢 현재 ${spendingCount}개의 과금 확인이 필요해요.`
+        : "과금 확인이 필요한 항목이 없어요.";
+    spendingLine.disabled = !canToggleSpending;
+    spendingLine.setAttribute(
+      "aria-expanded",
+      canToggleSpending ? String(state.spendingAlertsExpanded) : "false"
+    );
+  }
+  if (spendingList) {
+    if (canToggleSpending) {
+      const lines = state.alerts.spending_due
+        .map((s) => `${s.game_title}, ${s.spending_title}, 남은 ${s.remain_date}일`)
+        .join("\n");
+      spendingList.textContent = lines;
+      spendingList.classList.toggle("hidden", !state.spendingAlertsExpanded);
+    } else {
+      spendingList.textContent = "";
+      spendingList.classList.add("hidden");
     }
   }
   if (line3) {
@@ -1167,6 +1211,16 @@ function wireActions() {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         toggleAlertsList();
+      }
+    });
+  }
+  const spendingToggle = el("alert-spending-line");
+  if (spendingToggle) {
+    spendingToggle.addEventListener("click", () => toggleSpendingAlerts());
+    spendingToggle.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        toggleSpendingAlerts();
       }
     });
   }

@@ -1167,16 +1167,26 @@ class EventAlertOut(BaseModel):
     game_title: str
 
 
-class DashboardAlert(BaseModel):
-    ongoing_count: int
-    ongoing_events: List[EventAlertOut]
-    tomorrow_refresh_titles: List[str]
+class SpendingAlertOut(BaseModel):
+    game_title: str
+    spending_title: str
+    remain_date: int
 
 
 class DashboardAlert(BaseModel):
     ongoing_count: int
     ongoing_events: List[EventAlertOut]
     tomorrow_refresh_titles: List[str]
+    spending_due_count: int
+    spending_due: List[SpendingAlertOut]
+
+
+class DashboardAlert(BaseModel):
+    ongoing_count: int
+    ongoing_events: List[EventAlertOut]
+    tomorrow_refresh_titles: List[str]
+    spending_due_count: int
+    spending_due: List[SpendingAlertOut]
 
 
 class SpendingOut(BaseModel):
@@ -1461,6 +1471,22 @@ def dashboard_alerts(db: Session = Depends(get_db)):
         for ev, game_title in rows
     ]
 
+    spending_rows = db.execute(
+        select(Spending, Game.title)
+        .join(Game, Game.id == Spending.game_id)
+        .where(Game.stop_play.is_(False))
+    ).all()
+    spending_due = []
+    for spending, game_title in spending_rows:
+        if spending.remain_date <= 3:
+            spending_due.append(
+                SpendingAlertOut(
+                    game_title=game_title,
+                    spending_title=spending.title,
+                    remain_date=spending.remain_date,
+                )
+            )
+
     tomorrow = today + dt.timedelta(days=1)
     # convert python weekday (Mon=0) to desired format (Sun=1)
     tomorrow_day = ((tomorrow.weekday() + 1) % 7) + 1
@@ -1475,6 +1501,8 @@ def dashboard_alerts(db: Session = Depends(get_db)):
         ongoing_count=len(ongoing),
         ongoing_events=ongoing,
         tomorrow_refresh_titles=refresh_titles,
+        spending_due_count=len(spending_due),
+        spending_due=spending_due,
     )
 
 

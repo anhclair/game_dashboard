@@ -101,14 +101,23 @@ a:hover { text-decoration: underline; }
 .alert-toggle {
   background: none;
   border: none;
-  padding: 0;
+  padding: 2px 0;
   width: 100%;
   text-align: left;
   cursor: pointer;
+  color: #111;
 }
 .alert-toggle:disabled {
   cursor: default;
   opacity: 0.8;
+  color: #6b7280;
+  background: none;
+}
+.alert-toggle[aria-expanded="true"] {
+  background: #0a7cff;
+  color: #fff;
+  border-radius: 8px;
+  padding: 6px 8px;
 }
 .alert-line {
   margin: 4px 0;
