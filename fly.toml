@@ -8,7 +8,6 @@ primary_region = "nrt"  # change to your closest region
 
 [env]
   PORT = "8080"
-  DATABASE_URL = "sqlite:////data/data.db"
 
 [http_service]
   internal_port = 8080

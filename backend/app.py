@@ -2,13 +2,17 @@ import csv
 import json
 import os
 import datetime as dt
+import time
+import threading
+from collections import deque
 from pathlib import Path
 import zipfile
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Tuple
 
-from fastapi import Depends, FastAPI, HTTPException, status
-from fastapi.responses import FileResponse
+from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.responses import FileResponse, JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 from sqlalchemy import (
@@ -35,6 +39,12 @@ EXCEL_EPOCH = dt.date(1899, 12, 30)
 IMAGE_DIR = FILES_DIR / "image"
 SW_PATH = STATIC_DIR / "service-worker.js"
 LOCAL_TZ = dt.timezone(dt.timedelta(hours=9))  # KST
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()
+RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW", "10"))
+RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "120"))
+RATE_LIMIT_MUTATION_MAX = int(os.getenv("RATE_LIMIT_MUTATION_MAX", "40"))
+EVENT_TYPE_OPTIONS = {"업데이트", "스토리", "픽업", "컨텐츠", "파밍", "시즌", "주년", "페이백"}
+EVENT_PRIORITY_OPTIONS = {"매우낮음", "낮음", "중간", "높음", "매우높음"}
 
 REFRESH_DEFAULTS: Dict[str, Tuple[Optional[int], Optional[str]]] = {
     "니케": (3, "05:00"),
@@ -332,6 +342,51 @@ def parse_task_list(raw: Optional[str]) -> List[str]:
     return [part.strip() for part in str(raw).split(";") if part.strip()]
 
 
+def encode_task_list(values: List[str]) -> str:
+    return ";".join([v.strip() for v in values if v.strip()])
+
+
+def decode_rewards(raw: Optional[str], length: int) -> List[List["RewardOut"]]:
+    if not raw:
+        return [[] for _ in range(length)]
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        data = []
+    if not isinstance(data, list):
+        data = []
+    rewards: List[List[RewardOut]] = []
+    for row in data:
+        if not isinstance(row, list):
+            rewards.append([])
+            continue
+        parsed_row: List[RewardOut] = []
+        for item in row:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            count = parse_int(item.get("count"), default=0) or 0
+            if title and count is not None:
+                parsed_row.append(RewardOut(title=title, count=count))
+        rewards.append(parsed_row)
+    if len(rewards) < length:
+        rewards.extend([[] for _ in range(length - len(rewards))])
+    return rewards[:length]
+
+
+def encode_rewards(rows: List[List["RewardIn"]]) -> str:
+    serializable: List[List[Dict[str, object]]] = []
+    for row in rows:
+        serializable.append(
+            [
+                {"title": r.title.strip(), "count": int(r.count)}
+                for r in row
+                if r.title.strip()
+            ]
+        )
+    return json.dumps(serializable, ensure_ascii=False)
+
+
 def _decode_state(raw: Optional[str], length: int) -> List[bool]:
     if not raw:
         return [False] * length
@@ -349,6 +404,20 @@ def _decode_state(raw: Optional[str], length: int) -> List[bool]:
 
 def _encode_state(values: List[bool]) -> str:
     return json.dumps([bool(v) for v in values])
+
+
+def _spending_reward_mode(spending: "Spending") -> str:
+    mode = (spending.reward_mode or "").upper()
+    if mode in {"DAILY", "ONCE"}:
+        return mode
+    text = (spending.type or "").lower()
+    if "패스" in text:
+        return "ONCE"
+    return "DAILY"
+
+
+def _spending_rewards(spending: "Spending") -> List["RewardOut"]:
+    return decode_reward_list(spending.reward_items)
 
 
 class Game(Base):
@@ -460,6 +529,12 @@ class Spending(Base):
     paying_date = Column(Date, nullable=False)
     type = Column(String, nullable=False)
     expiration_days = Column(Integer, default=0, nullable=False)
+    reward_mode = Column(String, nullable=True)
+    reward_items = Column(String, nullable=True)
+    last_reward_at = Column(DateTime(timezone=True), nullable=True)
+    reward_once_granted = Column(Boolean, default=False, nullable=False)
+    pass_current_level = Column(Integer, nullable=True)
+    pass_max_level = Column(Integer, nullable=True)
 
     game = relationship("Game", back_populates="spendings")
 
@@ -491,6 +566,12 @@ class Task(Base):
     daily_tasks = Column(String, nullable=True)
     weekly_tasks = Column(String, nullable=True)
     monthly_tasks = Column(String, nullable=True)
+    daily_rewards = Column(String, nullable=True)
+    weekly_rewards = Column(String, nullable=True)
+    monthly_rewards = Column(String, nullable=True)
+    daily_reward_state = Column(String, nullable=True)
+    weekly_reward_state = Column(String, nullable=True)
+    monthly_reward_state = Column(String, nullable=True)
     daily_state = Column(String, nullable=True)
     weekly_state = Column(String, nullable=True)
     monthly_state = Column(String, nullable=True)
@@ -586,6 +667,38 @@ def ensure_columns() -> None:
             conn.exec_driver_sql("ALTER TABLE currencies ADD COLUMN type STRING")
         if "value" not in ccols:
             conn.exec_driver_sql("ALTER TABLE currencies ADD COLUMN value REAL")
+        tcols = {
+            row[1]
+            for row in conn.exec_driver_sql("PRAGMA table_info(tasks)").all()
+        }
+        if "daily_rewards" not in tcols:
+            conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN daily_rewards STRING")
+        if "weekly_rewards" not in tcols:
+            conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN weekly_rewards STRING")
+        if "monthly_rewards" not in tcols:
+            conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN monthly_rewards STRING")
+        if "daily_reward_state" not in tcols:
+            conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN daily_reward_state STRING")
+        if "weekly_reward_state" not in tcols:
+            conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN weekly_reward_state STRING")
+        if "monthly_reward_state" not in tcols:
+            conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN monthly_reward_state STRING")
+        spcols = {
+            row[1]
+            for row in conn.exec_driver_sql("PRAGMA table_info(spendings)").all()
+        }
+        if "reward_mode" not in spcols:
+            conn.exec_driver_sql("ALTER TABLE spendings ADD COLUMN reward_mode STRING")
+        if "reward_items" not in spcols:
+            conn.exec_driver_sql("ALTER TABLE spendings ADD COLUMN reward_items STRING")
+        if "last_reward_at" not in spcols:
+            conn.exec_driver_sql("ALTER TABLE spendings ADD COLUMN last_reward_at DATETIME")
+        if "reward_once_granted" not in spcols:
+            conn.exec_driver_sql("ALTER TABLE spendings ADD COLUMN reward_once_granted BOOLEAN DEFAULT 0")
+        if "pass_current_level" not in spcols:
+            conn.exec_driver_sql("ALTER TABLE spendings ADD COLUMN pass_current_level INTEGER")
+        if "pass_max_level" not in spcols:
+            conn.exec_driver_sql("ALTER TABLE spendings ADD COLUMN pass_max_level INTEGER")
 
 
 def seed_games(db: Session) -> Dict[str, Game]:
@@ -594,7 +707,7 @@ def seed_games(db: Session) -> Dict[str, Game]:
     extra_rows = [
         {"Title": "엘든링", "StartDate": "2022년 4월 16일", "EndDate": "2024년 7월 14일"},
         {"Title": "할로우나이트:실크송", "StartDate": "2025년 9월 9일", "EndDate": "2025년 10월 1일"},
-        {"Title": "발더스게이트3", "StartDate": "2024년 8월 10일", "EndDate": "2024년 1월 9일"},
+        {"Title": "발더스게이트3", "StartDate": "2024년 8월 10일", "EndDate": "2025년 1월 9일"},
     ]
     if not rows:
         rows = []
@@ -605,10 +718,14 @@ def seed_games(db: Session) -> Dict[str, Game]:
         rows = [dict(zip(headers, (r + [""] * (header_len - len(r)))[:header_len])) for r in body]
     rows.extend(extra_rows)
     games: Dict[str, Game] = {}
+    seen_titles = set()
     for row in rows:
         title = row.get("Title")
         if not title:
             continue
+        if title in seen_titles:
+            continue
+        seen_titles.add(title)
         start_date = parse_date_value(row.get("StartDate"))
         end_date = parse_date_value(row.get("EndDate"))
         stop_play = parse_bool(row.get("StopPlay"), default=False)
@@ -892,6 +1009,9 @@ class TaskOut(BaseModel):
     daily_tasks: List[str]
     weekly_tasks: List[str]
     monthly_tasks: List[str]
+    daily_rewards: List[List["RewardOut"]]
+    weekly_rewards: List[List["RewardOut"]]
+    monthly_rewards: List[List["RewardOut"]]
     daily_state: List[bool]
     weekly_state: List[bool]
     monthly_state: List[bool]
@@ -904,6 +1024,54 @@ class TaskStateUpdate(BaseModel):
     daily_state: Optional[List[bool]] = None
     weekly_state: Optional[List[bool]] = None
     monthly_state: Optional[List[bool]] = None
+
+
+class TaskUpdate(BaseModel):
+    daily_tasks: Optional[List[str]] = None
+    weekly_tasks: Optional[List[str]] = None
+    monthly_tasks: Optional[List[str]] = None
+    daily_rewards: Optional[List[List["RewardIn"]]] = None
+    weekly_rewards: Optional[List[List["RewardIn"]]] = None
+    monthly_rewards: Optional[List[List["RewardIn"]]] = None
+
+
+class RewardIn(BaseModel):
+    title: str
+    count: int = Field(..., description="지급/차감 수량(음수 허용)")
+
+
+class RewardOut(BaseModel):
+    title: str
+    count: int
+
+
+def decode_reward_list(raw: Optional[str]) -> List["RewardOut"]:
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        data = []
+    if not isinstance(data, list):
+        return []
+    rewards: List[RewardOut] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        count = parse_int(item.get("count"), default=0) or 0
+        if title:
+            rewards.append(RewardOut(title=title, count=count))
+    return rewards
+
+
+def encode_reward_list(rows: List["RewardIn"]) -> str:
+    serializable: List[Dict[str, object]] = []
+    for r in rows:
+        if not r.title.strip():
+            continue
+        serializable.append({"title": r.title.strip(), "count": int(r.count)})
+    return json.dumps(serializable, ensure_ascii=False)
 
 
 class GameOut(BaseModel):
@@ -925,6 +1093,9 @@ class GameOut(BaseModel):
     memo: Optional[str]
     refresh_day: Optional[int]
     refresh_time: Optional[str]
+    daily_complete: bool = False
+    weekly_complete: bool = False
+    monthly_complete: bool = False
 
     @field_validator("uid", mode="before")
     def coerce_uid(cls, v):
@@ -1021,6 +1192,23 @@ class SpendingOut(BaseModel):
     next_paying_date: dt.date
     remain_date: int
     is_repaying: str
+    reward_mode: str | None = None
+    rewards: List["RewardOut"] = []
+    pass_current_level: Optional[int] = None
+    pass_max_level: Optional[int] = None
+
+
+class SpendingConfigUpdate(BaseModel):
+    reward_mode: Optional[str] = None
+    rewards: Optional[List["RewardIn"]] = None
+    pass_current_level: Optional[int] = None
+    pass_max_level: Optional[int] = None
+
+
+TaskOut.model_rebuild()
+TaskUpdate.model_rebuild()
+SpendingOut.model_rebuild()
+SpendingConfigUpdate.model_rebuild()
 
 
 class CurrencyAdjust(BaseModel):
@@ -1051,6 +1239,20 @@ class EventCreate(BaseModel):
             return None
         return v
 
+    @field_validator("type", mode="after")
+    @classmethod
+    def validate_type(cls, v):
+        if v not in EVENT_TYPE_OPTIONS:
+            raise ValueError(f"유효하지 않은 이벤트 분류입니다. {sorted(EVENT_TYPE_OPTIONS)} 중 선택하세요.")
+        return v
+
+    @field_validator("priority", mode="after")
+    @classmethod
+    def validate_priority(cls, v):
+        if v not in EVENT_PRIORITY_OPTIONS:
+            raise ValueError(f"유효하지 않은 중요도입니다. {sorted(EVENT_PRIORITY_OPTIONS)} 중 선택하세요.")
+        return v
+
 
 class CharacterUpdate(BaseModel):
     level: Optional[int] = None
@@ -1065,7 +1267,76 @@ class GameEndPayload(BaseModel):
     )
 
 
+class SimpleRateLimiter:
+    def __init__(self, limit: int, window_seconds: int):
+        self.limit = max(1, limit)
+        self.window = max(1, window_seconds)
+        self.hits: Dict[str, deque] = {}
+        self.lock = threading.Lock()
+
+    def allow(self, key: str) -> Tuple[bool, int]:
+        now = time.time()
+        with self.lock:
+            q = self.hits.get(key)
+            if q is None:
+                q = deque()
+                self.hits[key] = q
+            while q and now - q[0] > self.window:
+                q.popleft()
+            if len(q) >= self.limit:
+                retry_after = int(self.window - (now - q[0]))
+                return False, max(retry_after, 1)
+            q.append(now)
+            return True, 0
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app: FastAPI):
+        super().__init__(app)
+        self.all_limiter = SimpleRateLimiter(RATE_LIMIT_MAX, RATE_LIMIT_WINDOW)
+        self.mutation_limiter = SimpleRateLimiter(
+            RATE_LIMIT_MUTATION_MAX, RATE_LIMIT_WINDOW
+        )
+
+    async def dispatch(self, request: Request, call_next):
+        client_ip = "unknown"
+        if request.client and request.client.host:
+            client_ip = request.client.host
+        method = request.method.upper()
+        allowed, retry_after = self.all_limiter.allow(f"{client_ip}:all")
+        if not allowed:
+            return JSONResponse(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                content={"detail": "Too many requests", "retry_after": retry_after},
+            )
+        if method in {"POST", "PUT", "PATCH", "DELETE"}:
+            allowed_mut, retry_after_mut = self.mutation_limiter.allow(
+                f"{client_ip}:mut"
+            )
+            if not allowed_mut:
+                return JSONResponse(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    content={"detail": "Too many write requests", "retry_after": retry_after_mut},
+                )
+        response = await call_next(request)
+        return response
+
+
+def require_admin_token(request: Request):
+    if not ADMIN_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Admin token is not configured on the server.",
+        )
+    header_val = request.headers.get("x-admin-token") or ""
+    if header_val.strip() != ADMIN_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Invalid admin token"
+        )
+
+
 app = FastAPI(title="Dashboard Backend", version="0.2.0")
+app.add_middleware(RateLimitMiddleware)
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -1090,7 +1361,17 @@ def health():
     return {"status": "ok"}
 
 
-@app.post("/items", response_model=ItemOut, status_code=status.HTTP_201_CREATED)
+@app.get("/auth/verify")
+def verify_admin(_: None = Depends(require_admin_token)):
+    return {"status": "ok"}
+
+
+@app.post(
+    "/items",
+    response_model=ItemOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_admin_token)],
+)
 def create_item(payload: ItemCreate, db: Session = Depends(get_db)):
     item = Item(label=payload.label, gift_code=payload.gift_code, state=payload.state)
     db.add(item)
@@ -1105,7 +1386,11 @@ def list_items(db: Session = Depends(get_db)):
     return result.scalars().all()
 
 
-@app.post("/actions/click", response_model=ItemOut)
+@app.post(
+    "/actions/click",
+    response_model=ItemOut,
+    dependencies=[Depends(require_admin_token)],
+)
 def click_action(payload: ActionPayload, db: Session = Depends(get_db)):
     item = db.get(Item, payload.item_id)
     if not item:
@@ -1155,6 +1440,7 @@ def weekly_metrics(db: Session = Depends(get_db)):
 @app.get("/dashboard/alerts", response_model=DashboardAlert)
 def dashboard_alerts(db: Session = Depends(get_db)):
     today = today_local()
+    games = db.execute(select(Game)).scalars().all()
     rows = db.execute(
         select(GameEvent, Game.title)
         .join(Game, Game.id == GameEvent.game_id)
@@ -1175,7 +1461,6 @@ def dashboard_alerts(db: Session = Depends(get_db)):
         for ev, game_title in rows
     ]
 
-    games = db.execute(select(Game)).scalars().all()
     tomorrow = today + dt.timedelta(days=1)
     # convert python weekday (Mon=0) to desired format (Sun=1)
     tomorrow_day = ((tomorrow.weekday() + 1) % 7) + 1
@@ -1204,13 +1489,55 @@ def list_games(
         query = query.where(Game.stop_play.is_(False))
     if during_play_only:
         query = query.where(Game.end_date.is_(None))
-    result = db.execute(query)
-    games = result.scalars().all()
+    games = list(db.execute(query).scalars().all())
     games.sort(key=lambda g: (g.stop_play, -g.playtime_days))
+    game_ids = [g.id for g in games]
+
+    tasks_by_game: Dict[int, Task] = {}
+    if game_ids:
+        task_rows = db.execute(select(Task).where(Task.game_id.in_(game_ids))).scalars().all()
+        tasks_by_game = {t.game_id: t for t in task_rows}
+
+    currency_latest: Dict[int, List[Currency]] = {}
+    if game_ids:
+        rows = (
+            db.execute(
+                select(Currency)
+                .where(Currency.game_id.in_(game_ids))
+                .order_by(Currency.game_id.asc(), Currency.title.asc(), Currency.timestamp.desc(), Currency.id.desc())
+            )
+            .scalars()
+            .all()
+        )
+        temp: Dict[Tuple[int, str], Currency] = {}
+        for r in rows:
+            key = (r.game_id, r.title)
+            if key not in temp:
+                temp[key] = r
+        for (gid, _), cur in temp.items():
+            currency_latest.setdefault(gid, []).append(cur)
+
+    changed = False
     for g in games:
-        pull_count, pull_msg = compute_gacha_pull(g, db)
+        latest_cur = currency_latest.get(g.id, [])
+        pull_count, pull_msg = compute_gacha_pull(g, db, latest_cur)
         g.gacha_pull_count = pull_count
         g.gacha_pull_message = pull_msg
+        task = tasks_by_game.get(g.id)
+        if task:
+            changed = _ensure_task_resets(task, g, db) or changed
+            lists = _task_lists(task)
+            states = _task_states(task, lists)
+            g.daily_complete = bool(states[0]) and all(states[0])
+            g.weekly_complete = bool(states[1]) and all(states[1])
+            g.monthly_complete = bool(states[2]) and all(states[2])
+        else:
+            g.daily_complete = False
+            g.weekly_complete = False
+            g.monthly_complete = False
+        changed = _apply_spending_rewards(g, db) or changed
+    if changed:
+        db.commit()
     return games
 
 
@@ -1301,10 +1628,10 @@ def backfill_seed_defaults(db: Session) -> None:
                     cur.value = value
 
 
-def compute_gacha_pull(game: Game, db: Session) -> Tuple[int, str]:
+def compute_gacha_pull(game: Game, db: Session, latest_currencies: Optional[List[Currency]] = None) -> Tuple[int, str]:
     if not game.gacha or game.gacha <= 0:
         return 0, "이 게임은 뽑기가 없는 게임이네요. 재밌게 즐기세요!"
-    currencies = get_latest_currencies(db, game)
+    currencies = latest_currencies or get_latest_currencies(db, game)
     total_units = 0
     for cur in currencies:
         ctype = normalize_currency_type(cur.type)
@@ -1343,7 +1670,81 @@ def list_currencies(game_id: int, db: Session = Depends(get_db)):
 def get_tasks(game_id: int, db: Session = Depends(get_db)) -> TaskOut:
     game = get_game_or_404(game_id, db)
     task = get_task_or_404(game.id, db)
+    changed = _ensure_task_resets(task, game, db)
+    changed = _apply_spending_rewards(game, db) or changed
+    if changed:
+        db.commit()
+        db.refresh(task)
+    return task_to_out(task, db)
+
+
+@app.post(
+    "/games/{game_id}/tasks/update",
+    response_model=TaskOut,
+    dependencies=[Depends(require_admin_token)],
+)
+def update_tasks(
+    game_id: int, payload: TaskUpdate, db: Session = Depends(get_db)
+) -> TaskOut:
+    game = get_game_or_404(game_id, db)
+    task = get_task_or_404(game.id, db)
     _ensure_task_resets(task, game, db)
+    lists = list(_task_lists(task))
+    states = list(_task_states(task, tuple(lists)))
+    reward_states = list(_reward_states(task, tuple(lists)))
+    rewards: List[List[List[RewardIn]]] = [
+        [[RewardIn(title=r.title, count=r.count) for r in row] for row in decoded]
+        for decoded in _task_rewards(task, tuple(lists))
+    ]
+
+    def apply_updates(idx: int, new_values: Optional[List[str]]):
+        if new_values is None:
+            return
+        clean = [v.strip() for v in new_values if v and v.strip()]
+        lists[idx] = clean
+        states[idx] = states[idx][: len(clean)]
+        if len(states[idx]) < len(clean):
+            states[idx].extend([False] * (len(clean) - len(states[idx])))
+
+    apply_updates(0, payload.daily_tasks)
+    apply_updates(1, payload.weekly_tasks)
+    apply_updates(2, payload.monthly_tasks)
+
+    def apply_rewards(idx: int, new_rewards: Optional[List[List[RewardIn]]]):
+        if new_rewards is None:
+            return
+        padded: List[List[RewardIn]] = []
+        for row in new_rewards[: len(lists[idx])]:
+            padded.append([RewardIn(title=r.title.strip(), count=r.count) for r in row if r.title.strip()])
+        if len(padded) < len(lists[idx]):
+            padded.extend([[] for _ in range(len(lists[idx]) - len(padded))])
+        rewards[idx] = padded
+
+    apply_rewards(0, payload.daily_rewards)
+    apply_rewards(1, payload.weekly_rewards)
+    apply_rewards(2, payload.monthly_rewards)
+
+    def sync_reward_states(idx: int):
+        reward_states[idx] = reward_states[idx][: len(lists[idx])]
+        if len(reward_states[idx]) < len(lists[idx]):
+            reward_states[idx].extend([False] * (len(lists[idx]) - len(reward_states[idx])))
+
+    sync_reward_states(0)
+    sync_reward_states(1)
+    sync_reward_states(2)
+
+    task.daily_tasks = encode_task_list(lists[0])
+    task.weekly_tasks = encode_task_list(lists[1])
+    task.monthly_tasks = encode_task_list(lists[2])
+    task.daily_rewards = encode_rewards(rewards[0])
+    task.weekly_rewards = encode_rewards(rewards[1])
+    task.monthly_rewards = encode_rewards(rewards[2])
+    task.daily_state = _encode_state(states[0])
+    task.weekly_state = _encode_state(states[1])
+    task.monthly_state = _encode_state(states[2])
+    task.daily_reward_state = _encode_state(reward_states[0])
+    task.weekly_reward_state = _encode_state(reward_states[1])
+    task.monthly_reward_state = _encode_state(reward_states[2])
     db.commit()
     db.refresh(task)
     return task_to_out(task, db)
@@ -1358,7 +1759,11 @@ def _normalize_state(new_state: Optional[List[bool]], length: int, current: List
     return vals
 
 
-@app.post("/tasks/{task_id}/state", response_model=TaskOut)
+@app.post(
+    "/tasks/{task_id}/state",
+    response_model=TaskOut,
+    dependencies=[Depends(require_admin_token)],
+)
 def update_task_state(task_id: int, payload: TaskStateUpdate, db: Session = Depends(get_db)) -> TaskOut:
     task = db.get(Task, task_id)
     if not task:
@@ -1366,19 +1771,33 @@ def update_task_state(task_id: int, payload: TaskStateUpdate, db: Session = Depe
     game = task.game or get_game_or_404(task.game_id, db)
     _ensure_task_resets(task, game, db)
     lists = _task_lists(task)
-    states = list(_task_states(task, lists))
+    rewards = _task_rewards(task, lists)
+    prev_states = list(_task_states(task, lists))
+    reward_states = list(_reward_states(task, lists))
+    states = list(prev_states)
     states[0] = _normalize_state(payload.daily_state, len(lists[0]), states[0])
     states[1] = _normalize_state(payload.weekly_state, len(lists[1]), states[1])
     states[2] = _normalize_state(payload.monthly_state, len(lists[2]), states[2])
+    reward_states[0] = _normalize_state(reward_states[0], len(lists[0]), reward_states[0])
+    reward_states[1] = _normalize_state(reward_states[1], len(lists[1]), reward_states[1])
+    reward_states[2] = _normalize_state(reward_states[2], len(lists[2]), reward_states[2])
+    _apply_reward_on_completion(game, rewards, prev_states, states, reward_states, db)
     task.daily_state = _encode_state(states[0])
     task.weekly_state = _encode_state(states[1])
     task.monthly_state = _encode_state(states[2])
+    task.daily_reward_state = _encode_state(reward_states[0])
+    task.weekly_reward_state = _encode_state(reward_states[1])
+    task.monthly_reward_state = _encode_state(reward_states[2])
     db.commit()
     db.refresh(task)
     return task_to_out(task, db)
 
 
-@app.post("/currencies/{currency_id}/adjust", response_model=CurrencyOut)
+@app.post(
+    "/currencies/{currency_id}/adjust",
+    response_model=CurrencyOut,
+    dependencies=[Depends(require_admin_token)],
+)
 def adjust_currency(
     currency_id: int, payload: CurrencyAdjust, db: Session = Depends(get_db)
 ):
@@ -1413,16 +1832,17 @@ def list_game_events(game_id: int, db: Session = Depends(get_db)):
 @app.get("/games/{game_id}/spendings", response_model=List[SpendingOut])
 def list_spendings(game_id: int, db: Session = Depends(get_db)):
     game = get_game_or_404(game_id, db)
-    result = db.execute(
-        select(Spending)
-        .where(Spending.game_id == game.id)
-    )
+    result = db.execute(select(Spending).where(Spending.game_id == game.id))
     spendings = result.scalars().all()
     spendings.sort(key=lambda s: s.next_paying_date)
-    return spendings
+    return [_spending_to_out(s) for s in spendings]
 
 
-@app.post("/games/{game_id}/end", response_model=GameOut)
+@app.post(
+    "/games/{game_id}/end",
+    response_model=GameOut,
+    dependencies=[Depends(require_admin_token)],
+)
 def end_game(game_id: int, payload: GameEndPayload, db: Session = Depends(get_db)):
     game = get_game_or_404(game_id, db)
     game.end_date = payload.end_date or dt.date.today()
@@ -1432,27 +1852,82 @@ def end_game(game_id: int, payload: GameEndPayload, db: Session = Depends(get_db
     return game
 
 
-@app.post("/spendings/{spending_id}/renew", response_model=SpendingOut)
+@app.post(
+    "/spendings/{spending_id}/renew",
+    response_model=SpendingOut,
+    dependencies=[Depends(require_admin_token)],
+)
 def renew_spending(
     spending_id: int, payload: SpendingAdjust, db: Session = Depends(get_db)
 ):
     spending = db.get(Spending, spending_id)
     if not spending:
         raise HTTPException(status_code=404, detail="Spending not found")
+    base_days = spending.expiration_days
+    if payload.expiration_days is not None:
+        base_days = payload.expiration_days
+    today = dt.date.today()
+    mode = _spending_reward_mode(spending)
+    remain = spending.remain_date
     if payload.paying_date:
         spending.paying_date = payload.paying_date
     else:
-        spending.paying_date = dt.date.today()
-    if payload.expiration_days is not None:
-        spending.expiration_days = payload.expiration_days
+        spending.paying_date = today
+    if mode == "DAILY" and remain >= 1:
+        spending.expiration_days = base_days + remain
+    else:
+        spending.expiration_days = base_days
     if payload.paying is not None:
         spending.paying = payload.paying
+    spending.reward_once_granted = False
+    spending.last_reward_at = None
     db.commit()
     db.refresh(spending)
-    return spending
+    return _spending_to_out(spending)
 
 
-@app.post("/games/{game_id}/events", response_model=GameEventOut, status_code=201)
+@app.post(
+    "/spendings/{spending_id}/configure",
+    response_model=SpendingOut,
+    dependencies=[Depends(require_admin_token)],
+)
+def configure_spending(
+    spending_id: int, payload: SpendingConfigUpdate, db: Session = Depends(get_db)
+) -> SpendingOut:
+    spending = db.get(Spending, spending_id)
+    if not spending:
+        raise HTTPException(status_code=404, detail="Spending not found")
+    if payload.reward_mode:
+        mode = payload.reward_mode.upper()
+        if mode not in {"DAILY", "ONCE"}:
+            raise HTTPException(status_code=400, detail="reward_mode must be DAILY or ONCE")
+        spending.reward_mode = mode
+    if payload.rewards is not None:
+        spending.reward_items = encode_reward_list(payload.rewards)
+        spending.reward_once_granted = False
+        spending.last_reward_at = None
+    if payload.pass_max_level is not None:
+        if payload.pass_max_level <= 0:
+            raise HTTPException(status_code=400, detail="pass_max_level must be positive")
+        spending.pass_max_level = payload.pass_max_level
+    if payload.pass_current_level is not None:
+        if payload.pass_current_level < 0:
+            raise HTTPException(status_code=400, detail="pass_current_level must be >= 0")
+        spending.pass_current_level = payload.pass_current_level
+    if spending.pass_max_level and spending.pass_current_level:
+        if spending.pass_current_level > spending.pass_max_level:
+            raise HTTPException(status_code=400, detail="pass_current_level cannot exceed pass_max_level")
+    db.commit()
+    db.refresh(spending)
+    return _spending_to_out(spending)
+
+
+@app.post(
+    "/games/{game_id}/events",
+    response_model=GameEventOut,
+    status_code=201,
+    dependencies=[Depends(require_admin_token)],
+)
 def create_game_event(
     game_id: int, payload: EventCreate, db: Session = Depends(get_db)
 ):
@@ -1471,7 +1946,11 @@ def create_game_event(
     return event
 
 
-@app.put("/games/{game_id}/events/{event_id}", response_model=GameEventOut)
+@app.put(
+    "/games/{game_id}/events/{event_id}",
+    response_model=GameEventOut,
+    dependencies=[Depends(require_admin_token)],
+)
 def update_game_event(
     game_id: int, event_id: int, payload: EventCreate, db: Session = Depends(get_db)
 ):
@@ -1489,7 +1968,11 @@ def update_game_event(
     return event
 
 
-@app.post("/games/{game_id}/memo", response_model=GameOut)
+@app.post(
+    "/games/{game_id}/memo",
+    response_model=GameOut,
+    dependencies=[Depends(require_admin_token)],
+)
 def update_game_memo(
     game_id: int, payload: GameMemoUpdate, db: Session = Depends(get_db)
 ):
@@ -1503,7 +1986,11 @@ def update_game_memo(
     return game
 
 
-@app.post("/characters/{character_id}/update", response_model=CharacterOut)
+@app.post(
+    "/characters/{character_id}/update",
+    response_model=CharacterOut,
+    dependencies=[Depends(require_admin_token)],
+)
 def update_character(
     character_id: int, payload: CharacterUpdate, db: Session = Depends(get_db)
 ):
@@ -1641,26 +2128,156 @@ def _task_states(task: Task, lists: Tuple[List[str], List[str], List[str]]) -> T
     )
 
 
-def _ensure_task_resets(task: Task, game: Game, db: Session) -> None:
+def _task_rewards(
+    task: Task, lists: Tuple[List[str], List[str], List[str]]
+) -> Tuple[List[List[RewardOut]], List[List[RewardOut]], List[List[RewardOut]]]:
+    daily_list, weekly_list, monthly_list = lists
+    return (
+        decode_rewards(task.daily_rewards, len(daily_list)),
+        decode_rewards(task.weekly_rewards, len(weekly_list)),
+        decode_rewards(task.monthly_rewards, len(monthly_list)),
+    )
+
+
+def _reward_states(
+    task: Task, lists: Tuple[List[str], List[str], List[str]]
+) -> Tuple[List[bool], List[bool], List[bool]]:
+    daily_list, weekly_list, monthly_list = lists
+    return (
+        _decode_state(task.daily_reward_state, len(daily_list)),
+        _decode_state(task.weekly_reward_state, len(weekly_list)),
+        _decode_state(task.monthly_reward_state, len(monthly_list)),
+    )
+
+
+def _apply_reward_on_completion(
+    game: Game,
+    rewards: Tuple[List[List[RewardOut]], List[List[RewardOut]], List[List[RewardOut]]],
+    prev_states: List[List[bool]],
+    next_states: List[List[bool]],
+    reward_states: List[List[bool]],
+    db: Session,
+) -> None:
+    for idx in range(3):
+        reward_rows = rewards[idx] if idx < len(rewards) else []
+        prev = prev_states[idx] if idx < len(prev_states) else []
+        nxt = next_states[idx] if idx < len(next_states) else []
+        rstates = reward_states[idx] if idx < len(reward_states) else []
+        for i, state_now in enumerate(nxt):
+            was = prev[i] if i < len(prev) else False
+            already = rstates[i] if i < len(rstates) else False
+            if state_now and not was and not already:
+                for rew in reward_rows[i] if i < len(reward_rows) else []:
+                    _grant_currency(game, rew, db)
+                if i < len(rstates):
+                    rstates[i] = True
+
+
+def _apply_spending_rewards(game: Game, db: Session) -> bool:
+    now = dt.datetime.now(LOCAL_TZ)
+    _, refresh_time = _game_refresh_info(game)
+    anchor_daily = _most_recent_daily(now, refresh_time)
+    spendings = db.execute(select(Spending).where(Spending.game_id == game.id)).scalars().all()
+    changed = False
+    today = today_local()
+    for sp in spendings:
+        mode = _spending_reward_mode(sp)
+        rewards = _spending_rewards(sp)
+        if not rewards:
+            continue
+        if sp.next_paying_date < today:
+            continue
+        if mode == "DAILY":
+            last = sp.last_reward_at
+            if _needs_reset(last, anchor_daily):
+                for rew in rewards:
+                    _grant_currency(game, rew, db)
+                sp.last_reward_at = anchor_daily
+                changed = True
+        else:
+            if not sp.reward_once_granted:
+                if sp.pass_max_level and sp.pass_current_level is not None:
+                    threshold = int(sp.pass_max_level * 0.75)
+                    if sp.pass_current_level < threshold:
+                        continue
+                for rew in rewards:
+                    _grant_currency(game, rew, db)
+                sp.reward_once_granted = True
+                changed = True
+    if changed:
+        db.flush()
+    return changed
+
+
+def _spending_to_out(spending: "Spending") -> "SpendingOut":
+    rewards = _spending_rewards(spending)
+    mode = _spending_reward_mode(spending)
+    return SpendingOut(
+        id=spending.id,
+        game_id=spending.game_id,
+        title=spending.title,
+        paying=spending.paying,
+        paying_date=spending.paying_date,
+        type=spending.type,
+        expiration_days=spending.expiration_days,
+        next_paying_date=spending.next_paying_date,
+        remain_date=spending.remain_date,
+        is_repaying=spending.is_repaying,
+        reward_mode=mode,
+        rewards=rewards,
+        pass_current_level=spending.pass_current_level,
+        pass_max_level=spending.pass_max_level,
+    )
+
+
+def _grant_currency(game: Game, reward: RewardOut, db: Session) -> None:
+    if not reward.title or reward.count is None:
+        return
+    count = int(reward.count)
+    if count == 0:
+        return
+    latest = get_latest_currencies(db, game)
+    latest_map = {c.title: c for c in latest}
+    cur = latest_map.get(reward.title)
+    new_counts = (cur.counts if cur else 0) + count
+    if new_counts < 0:
+        new_counts = 0
+    new_entry = Currency(
+        title=reward.title,
+        game=game,
+        counts=new_counts,
+        timestamp=dt.datetime.now(dt.timezone.utc),
+        type=cur.type if cur else None,
+        value=cur.value if cur else None,
+    )
+    db.add(new_entry)
+
+
+def _ensure_task_resets(task: Task, game: Game, db: Session) -> bool:
+    changed = False
     now = dt.datetime.now(LOCAL_TZ)
     refresh_day, refresh_time = _game_refresh_info(game)
     lists = _task_lists(task)
     daily_list, weekly_list, monthly_list = lists
     states = list(_task_states(task, lists))
+    reward_states = list(_reward_states(task, lists))
 
     recent_daily = _most_recent_daily(now, refresh_time)
     if _needs_reset(task.last_daily_reset, recent_daily):
         if daily_list:
             db.add(
-                TaskHistory(
+                    TaskHistory(
                     task=task,
                     daily_done=int(all(states[0])) if states[0] else 0,
                     timestamp=recent_daily,
                 )
             )
         states[0] = [False] * len(daily_list)
+        reward_states[0] = [False] * len(daily_list)
         task.daily_state = _encode_state(states[0])
+        task.daily_reward_state = _encode_state(reward_states[0])
         task.last_daily_reset = recent_daily
+        changed = True
 
     if refresh_day:
         recent_weekly = _most_recent_weekly(now, refresh_time, refresh_day)
@@ -1668,14 +2285,17 @@ def _ensure_task_resets(task: Task, game: Game, db: Session) -> None:
             if weekly_list:
                 db.add(
                     TaskHistory(
-                        task=task,
-                        weekly_done=int(all(states[1])) if states[1] else 0,
-                        timestamp=recent_weekly,
-                    )
+                    task=task,
+                    weekly_done=int(all(states[1])) if states[1] else 0,
+                    timestamp=recent_weekly,
                 )
-            states[1] = [False] * len(weekly_list)
-            task.weekly_state = _encode_state(states[1])
-            task.last_weekly_reset = recent_weekly
+            )
+        states[1] = [False] * len(weekly_list)
+        reward_states[1] = [False] * len(weekly_list)
+        task.weekly_state = _encode_state(states[1])
+        task.weekly_reward_state = _encode_state(reward_states[1])
+        task.last_weekly_reset = recent_weekly
+        changed = True
 
     recent_monthly = _most_recent_monthly(now, refresh_time)
     if _needs_reset(task.last_monthly_reset, recent_monthly):
@@ -1688,9 +2308,13 @@ def _ensure_task_resets(task: Task, game: Game, db: Session) -> None:
                 )
             )
         states[2] = [False] * len(monthly_list)
+        reward_states[2] = [False] * len(monthly_list)
         task.monthly_state = _encode_state(states[2])
+        task.monthly_reward_state = _encode_state(reward_states[2])
         task.last_monthly_reset = recent_monthly
+        changed = True
     db.flush()
+    return changed
 
 def _latest_history(task: Task, db: Session, field: str) -> Optional[int]:
     col = getattr(TaskHistory, field)
@@ -1738,6 +2362,7 @@ def _task_messages(task: Task, db: Session) -> Tuple[Optional[str], Optional[str
 def task_to_out(task: Task, db: Session) -> TaskOut:
     lists = _task_lists(task)
     states = _task_states(task, lists)
+    rewards = _task_rewards(task, lists)
     daily_msg, weekly_msg, monthly_msg = _task_messages(task, db)
     return TaskOut(
         id=task.id,
@@ -1745,6 +2370,9 @@ def task_to_out(task: Task, db: Session) -> TaskOut:
         daily_tasks=lists[0],
         weekly_tasks=lists[1],
         monthly_tasks=lists[2],
+        daily_rewards=rewards[0],
+        weekly_rewards=rewards[1],
+        monthly_rewards=rewards[2],
         daily_state=states[0],
         weekly_state=states[1],
         monthly_state=states[2],

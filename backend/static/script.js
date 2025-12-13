@@ -6,8 +6,14 @@ const state = {
   canEdit: false,
   alerts: null,
   tasks: null,
+  taskEdit: false,
+  taskDraft: null,
   eventEditId: null,
+  taskCollapsed: { daily: false, weekly: false, monthly: false },
   characters: [],
+  spendingDraft: {},
+  spendingEdit: {},
+  adminToken: null,
   characterFilter: {
     level: "",
     grade: "",
@@ -50,8 +56,11 @@ function formatTimeLabel(val) {
 }
 
 async function fetchJSON(url, options = {}) {
+  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  const token = headers["X-Admin-Token"] || state.adminToken;
+  if (token) headers["X-Admin-Token"] = token;
   const res = await fetch(url, {
-    headers: { "Content-Type": "application/json" },
+    headers,
     ...options,
   });
   if (!res.ok) throw new Error(await res.text());
@@ -85,6 +94,23 @@ function renderGallery() {
     titleEl.textContent = g.title;
     if (g.stop_play) titleEl.classList.add("stopped");
     node.querySelector(".pill").textContent = g.playtime_label;
+    const badges = node.querySelector(".task-badges");
+    if (badges) {
+      const badgeMap = {
+        daily: g.daily_complete,
+        weekly: g.weekly_complete,
+        monthly: g.monthly_complete,
+      };
+      Object.entries(badgeMap).forEach(([key, done]) => {
+        const b = badges.querySelector(`[data-type="${key}"]`);
+        if (b) {
+          b.classList.remove("done", "pending");
+          b.classList.add(done ? "done" : "pending");
+          b.textContent = key === "daily" ? "일" : key === "weekly" ? "주" : "월";
+        }
+      });
+      badges.classList.remove("hidden");
+    }
     node.addEventListener("click", () => selectGame(g.id));
     gallery.appendChild(node);
   });
@@ -199,6 +225,8 @@ async function selectGame(gameId) {
   state.currencyFilter = "ALL";
   state.characterFilter = { level: "", grade: "", overpower: "", position: "" };
   state.characters = [];
+  state.spendingDraft = {};
+  state.spendingEdit = {};
   showView("detail");
   showDetailSkeleton();
   resetEventForm();
@@ -296,14 +324,13 @@ async function selectGame(gameId) {
   spendingSection.classList.toggle("hidden", hideEconomy);
   currencySection.classList.toggle("hidden", hideEconomy);
 
-  await Promise.all([
-    loadTasks(gameId),
-    hideEconomy ? Promise.resolve() : loadSpending(gameId),
-    hideEconomy ? Promise.resolve() : loadCurrencies(gameId),
-    hideEconomy ? Promise.resolve() : loadCurrencyChart(gameId),
-    loadEvents(gameId),
-    loadCharacters(gameId),
-  ]);
+  await Promise.all([loadTasks(gameId), loadEvents(gameId), loadCharacters(gameId)]);
+  if (!hideEconomy) {
+    await loadCurrencies(gameId);
+    await loadSpending(gameId);
+  } else {
+    await loadSpending(gameId);
+  }
   applyEditState();
 }
 
@@ -315,35 +342,192 @@ async function loadSpending(gameId) {
   spendings.forEach((s) => {
     const item = document.createElement("div");
     item.className = "list-item";
+    const mode = s.reward_mode || (s.type.includes("패스") ? "ONCE" : "DAILY");
+    const editing = Boolean(state.spendingEdit[s.id]);
+    const draft =
+      state.spendingDraft[s.id] ||
+      {
+        reward_mode: mode,
+        rewards: (s.rewards || []).map((r) => ({ ...r })),
+        pass_current_level: s.pass_current_level ?? "",
+        pass_max_level: s.pass_max_level ?? "",
+      };
+    state.spendingDraft[s.id] = draft;
+    const summaryRewards = (s.rewards || [])
+      .map((r) => `${r.title} ${r.count > 0 ? "+" : ""}${r.count}`)
+      .join(", ");
+    const passMeta =
+      mode === "ONCE" && (s.pass_current_level || s.pass_max_level)
+        ? `패스 레벨 ${s.pass_current_level ?? "-"} / ${s.pass_max_level ?? "-"}`
+        : "";
     item.innerHTML = `
-      <h4>${s.title}</h4>
-      <p class="meta">${s.paying} • ${s.type}</p>
-      <p class="meta">남은 ${s.remain_date}일 / ${s.is_repaying}</p>
-      <div class="row">
-        <input type="date" value="${s.paying_date}" data-id="${s.id}">
-        <button data-id="${s.id}">상품 추가구매</button>
+      <div class="row space-between">
+        <div>
+          <h4>${s.title}</h4>
+          <p class="meta">${s.paying} • ${s.type}</p>
+          <p class="meta">남은 ${s.remain_date}일 / ${s.is_repaying}</p>
+          <p class="meta">보상: ${summaryRewards || "미설정"}</p>
+          ${passMeta ? `<p class="meta">${passMeta}</p>` : ""}
+        </div>
+        <div class="row compact">
+          <input type="date" value="${s.paying_date}" data-id="${s.id}">
+          <button data-id="${s.id}">상품 추가구매</button>
+          <button class="ghost small-btn" data-edit="${s.id}">${editing ? "편집 취소" : "구성 수정"}</button>
+        </div>
       </div>
     `;
-    const actionBtn = item.querySelector("button");
-    if (!state.canEdit) actionBtn.classList.add("disabled-btn");
-    actionBtn.addEventListener("click", async (e) => {
+    const renewBtn = item.querySelector("button[data-id]");
+    if (!state.canEdit) renewBtn.classList.add("disabled-btn");
+    renewBtn.addEventListener("click", async () => {
       if (!state.canEdit) {
         alert("뷰어 권한입니다.");
         return;
       }
       const date = item.querySelector("input").value;
       try {
-        const updated = await fetchJSON(`/spendings/${s.id}/renew`, {
+        await fetchJSON(`/spendings/${s.id}/renew`, {
           method: "POST",
           body: JSON.stringify({ paying_date: date }),
         });
-        e.target.textContent = "완료!";
-        setTimeout(() => (e.target.textContent = "상품 추가구매"), 1200);
-        item.querySelector(".meta:nth-child(3)").textContent = `남은 ${updated.remain_date}일 / ${updated.is_repaying}`;
+        await loadSpending(gameId);
       } catch (err) {
         alert("갱신 실패");
       }
     });
+    const editBtn = item.querySelector(`button[data-edit="${s.id}"]`);
+    editBtn.addEventListener("click", () => {
+      if (!state.canEdit) {
+        alert("뷰어 권한입니다.");
+        return;
+      }
+      state.spendingEdit[s.id] = !editing;
+      if (!state.spendingEdit[s.id]) {
+        state.spendingDraft[s.id] = {
+          reward_mode: mode,
+          rewards: (s.rewards || []).map((r) => ({ ...r })),
+        };
+      }
+      loadSpending(gameId);
+    });
+
+    if (editing) {
+      const editor = document.createElement("div");
+      editor.className = "stack";
+      const modeRow = document.createElement("div");
+      modeRow.className = "row compact";
+      const modeSelect = document.createElement("select");
+      ["DAILY", "ONCE"].forEach((val) => {
+        const opt = document.createElement("option");
+        opt.value = val;
+        opt.textContent = val === "DAILY" ? "월정액(매일 지급)" : "패스(1회 지급)";
+        if (draft.reward_mode === val) opt.selected = true;
+        modeSelect.appendChild(opt);
+      });
+      modeSelect.addEventListener("change", () => {
+        draft.reward_mode = modeSelect.value;
+      });
+      modeRow.appendChild(modeSelect);
+      editor.appendChild(modeRow);
+
+      const rewardWrap = document.createElement("div");
+      rewardWrap.className = "stack";
+      const passWrap = document.createElement("div");
+      passWrap.className = "row compact";
+      if (draft.reward_mode === "ONCE") {
+        const cur = document.createElement("input");
+        cur.type = "number";
+        cur.placeholder = "현재 레벨";
+        cur.value = draft.pass_current_level ?? "";
+        cur.addEventListener("input", () => {
+          draft.pass_current_level = cur.value === "" ? "" : Number(cur.value);
+        });
+        const max = document.createElement("input");
+        max.type = "number";
+        max.placeholder = "최고 레벨";
+        max.value = draft.pass_max_level ?? "";
+        max.addEventListener("input", () => {
+          draft.pass_max_level = max.value === "" ? "" : Number(max.value);
+        });
+        passWrap.appendChild(cur);
+        passWrap.appendChild(max);
+        editor.appendChild(passWrap);
+      }
+      (draft.rewards || []).forEach((rw, ridx) => {
+        const rrow = document.createElement("div");
+        rrow.className = "row compact";
+        const select = document.createElement("select");
+        const defaultOpt = document.createElement("option");
+        defaultOpt.value = "";
+        defaultOpt.textContent = "재화 선택";
+        select.appendChild(defaultOpt);
+        (state.currencies || []).forEach((c) => {
+          const opt = document.createElement("option");
+          opt.value = c.title;
+          opt.textContent = c.title;
+          if (c.title === rw.title) opt.selected = true;
+          select.appendChild(opt);
+        });
+        select.value = rw.title || "";
+        select.addEventListener("change", () => {
+          draft.rewards[ridx].title = select.value;
+        });
+        const input = document.createElement("input");
+        input.type = "number";
+        input.value = rw.count ?? 0;
+        input.addEventListener("input", () => {
+          draft.rewards[ridx].count = Number(input.value || 0);
+        });
+        const delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.textContent = "삭제";
+        delBtn.className = "ghost small-btn";
+        delBtn.addEventListener("click", () => {
+          draft.rewards.splice(ridx, 1);
+          loadSpending(gameId);
+        });
+        rrow.appendChild(select);
+        rrow.appendChild(input);
+        rrow.appendChild(delBtn);
+        rewardWrap.appendChild(rrow);
+      });
+      const addReward = document.createElement("button");
+      addReward.type = "button";
+      addReward.textContent = "보상 추가";
+      addReward.className = "ghost small-btn";
+      addReward.addEventListener("click", () => {
+        draft.rewards.push({ title: state.currencies?.[0]?.title || "", count: 0 });
+        loadSpending(gameId);
+      });
+      rewardWrap.appendChild(addReward);
+      editor.appendChild(rewardWrap);
+
+      const saveRow = document.createElement("div");
+      saveRow.className = "row compact";
+      const saveBtn = document.createElement("button");
+      saveBtn.type = "button";
+      saveBtn.textContent = "구성 저장";
+      saveBtn.addEventListener("click", async () => {
+        try {
+          await fetchJSON(`/spendings/${s.id}/configure`, {
+            method: "POST",
+            body: JSON.stringify({
+              reward_mode: draft.reward_mode,
+              rewards: draft.rewards,
+              pass_current_level: draft.pass_current_level === "" ? null : Number(draft.pass_current_level),
+              pass_max_level: draft.pass_max_level === "" ? null : Number(draft.pass_max_level),
+            }),
+          });
+          state.spendingEdit[s.id] = false;
+          await loadSpending(gameId);
+        } catch {
+          alert("구성 저장 실패");
+        }
+      });
+      saveRow.appendChild(saveBtn);
+      editor.appendChild(saveRow);
+      item.appendChild(editor);
+    }
+
     list.appendChild(item);
   });
 }
@@ -401,11 +585,40 @@ async function loadCurrencies(gameId) {
 async function loadTasks(gameId) {
   const section = el("task-section");
   state.tasks = null;
+  state.taskEdit = false;
+  state.taskDraft = null;
   if (section) section.classList.add("hidden");
   try {
     const tasks = await fetchJSON(`/games/${gameId}/tasks`);
     state.tasks = tasks;
     renderTasks();
+    const master = el("task-daily-master");
+    if (master && !master.dataset.wired) {
+      master.dataset.wired = "1";
+      master.addEventListener("change", async () => {
+        if (!state.canEdit) {
+          master.checked = !master.checked;
+          alert("뷰어 권한입니다.");
+          return;
+        }
+        if (!state.tasks) return;
+        const next = master.checked;
+        state.tasks.daily_state = state.tasks.daily_state.map(() => next);
+        try {
+          await saveTaskState();
+        } catch {
+          master.checked = !next;
+        }
+      });
+    }
+    const toggleBtn = el("task-daily-toggle");
+    if (toggleBtn && !toggleBtn.dataset.wired) {
+      toggleBtn.dataset.wired = "1";
+      toggleBtn.addEventListener("click", () => {
+        state.taskCollapsed.daily = !state.taskCollapsed.daily;
+        renderTasks();
+      });
+    }
   } catch (err) {
     if (section) section.classList.add("hidden");
     console.warn("tasks unavailable", err);
@@ -434,14 +647,130 @@ async function saveTaskState() {
 function renderTaskGroup(key, items, states) {
   const block = el(`task-${key}`);
   const list = el(`task-${key}-list`);
+  const isDaily = key === "daily";
+  const master = isDaily ? el("task-daily-master") : null;
+  const toggleBtn = isDaily ? el("task-daily-toggle") : null;
+  const rewards = state.taskEdit
+    ? state.taskDraft?.[`${key}_rewards`] || []
+    : state.tasks?.[`${key}_rewards`] || [];
+  const currencyOptions = state.currencies || [];
   if (!block || !list) return;
   if (!items || items.length === 0) {
     block.classList.add("hidden");
     list.innerHTML = "";
+    if (master) master.checked = false;
     return;
   }
   block.classList.remove("hidden");
   list.innerHTML = "";
+  if (state.taskEdit) {
+    const draft = state.taskDraft?.[`${key}_tasks`] || items;
+    draft.forEach((text, idx) => {
+      const row = document.createElement("div");
+      row.className = "row compact";
+      const input = document.createElement("input");
+      input.type = "text";
+      input.value = text;
+      input.addEventListener("input", () => {
+        state.taskDraft[`${key}_tasks`][idx] = input.value;
+      });
+      const saveBtn = document.createElement("button");
+      saveBtn.type = "button";
+      saveBtn.textContent = "수정";
+      saveBtn.addEventListener("click", async () => {
+        state.taskDraft[`${key}_tasks`][idx] = input.value;
+      });
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.textContent = "삭제";
+      delBtn.className = "ghost small-btn";
+      delBtn.addEventListener("click", () => {
+        state.taskDraft[`${key}_tasks`].splice(idx, 1);
+        state.taskDraft[`${key}_rewards`].splice(idx, 1);
+        renderTasks();
+      });
+      row.appendChild(input);
+      row.appendChild(saveBtn);
+      row.appendChild(delBtn);
+      list.appendChild(row);
+
+      const rewardWrap = document.createElement("div");
+      rewardWrap.className = "reward-list";
+      const rewardRows = rewards[idx] || [];
+      rewardRows.forEach((rw, ridx) => {
+        const rrow = document.createElement("div");
+        rrow.className = "row compact reward-row";
+        const select = document.createElement("select");
+        const defaultOpt = document.createElement("option");
+        defaultOpt.value = "";
+        defaultOpt.textContent = "재화 선택";
+        select.appendChild(defaultOpt);
+        currencyOptions.forEach((c) => {
+          const opt = document.createElement("option");
+          opt.value = c.title;
+          opt.textContent = c.title;
+          if (c.title === rw.title) opt.selected = true;
+          select.appendChild(opt);
+        });
+        select.value = rw.title || "";
+        select.addEventListener("change", () => {
+          state.taskDraft[`${key}_rewards`][idx][ridx].title = select.value;
+        });
+        const inputCount = document.createElement("input");
+        inputCount.type = "number";
+        inputCount.value = rw.count ?? 0;
+        inputCount.min = "0";
+        inputCount.addEventListener("input", () => {
+          state.taskDraft[`${key}_rewards`][idx][ridx].count = Number(inputCount.value || 0);
+        });
+        const delReward = document.createElement("button");
+        delReward.type = "button";
+        delReward.textContent = "보상 삭제";
+        delReward.className = "ghost small-btn";
+        delReward.addEventListener("click", () => {
+          state.taskDraft[`${key}_rewards`][idx].splice(ridx, 1);
+          renderTasks();
+        });
+        rrow.appendChild(select);
+        rrow.appendChild(inputCount);
+        rrow.appendChild(delReward);
+        rewardWrap.appendChild(rrow);
+      });
+      const addReward = document.createElement("button");
+      addReward.type = "button";
+      addReward.textContent = "보상 추가";
+      addReward.className = "ghost small-btn";
+      addReward.addEventListener("click", () => {
+        state.taskDraft[`${key}_rewards`][idx].push({ title: currencyOptions[0]?.title || "", count: 0 });
+        renderTasks();
+      });
+      rewardWrap.appendChild(addReward);
+      list.appendChild(rewardWrap);
+    });
+    const addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.textContent = "추가하기";
+    addBtn.className = "ghost small-btn";
+    addBtn.addEventListener("click", () => {
+      state.taskDraft[`${key}_tasks`].push("");
+      state.taskDraft[`${key}_rewards`].push([]);
+      renderTasks();
+    });
+    list.appendChild(addBtn);
+    return;
+  }
+  if (master) {
+    const allDone = items.length > 0 && states.every(Boolean);
+    master.checked = allDone;
+    master.disabled = !state.canEdit;
+  }
+  if (toggleBtn) {
+    const collapsed = state.taskCollapsed.daily;
+    list.classList.toggle("collapsed", collapsed);
+    toggleBtn.textContent = collapsed ? "펼치기" : "접기";
+    toggleBtn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    toggleBtn.classList.toggle("active", !collapsed);
+  }
   items.forEach((text, idx) => {
     const row = document.createElement("label");
     const cb = document.createElement("input");
@@ -484,9 +813,24 @@ function renderTasks() {
     (data.monthly_tasks && data.monthly_tasks.length);
   section.classList.toggle("hidden", !hasAny);
   if (!hasAny) return;
+  const editToggle = el("task-edit-toggle");
+  const saveBtn = el("task-edit-save");
+  const cancelBtn = el("task-edit-cancel");
+  [editToggle, saveBtn, cancelBtn].forEach((btn) => {
+    if (!btn) return;
+    btn.classList.toggle("hidden", !state.canEdit || state.view !== "detail");
+  });
+  if (editToggle) {
+    editToggle.textContent = state.taskEdit ? "편집 중" : "편집하기";
+    editToggle.disabled = !state.canEdit;
+  }
+  if (saveBtn) saveBtn.classList.toggle("hidden", !state.taskEdit);
+  if (cancelBtn) cancelBtn.classList.toggle("hidden", !state.taskEdit);
   const dailyHint = el("task-daily-hint");
   const weeklyHint = el("task-weekly-hint");
   const monthlyHint = el("task-monthly-hint");
+  const masterRow = document.querySelector(".task-parent-row");
+  if (masterRow) masterRow.classList.toggle("hidden", state.taskEdit);
   if (dailyHint) {
     dailyHint.textContent = data.daily_message || "";
     dailyHint.classList.toggle("hidden", !data.daily_message);
@@ -784,10 +1128,10 @@ function renderCharacters() {
 }
 
 function renderVersion() {
-  const versionEl = el("version-text");
-  if (!versionEl) return;
   const today = new Date().toISOString().slice(0, 10);
-  versionEl.textContent = `최초 발행 2025-12-07, 업데이트 ${today}, 현재 버전 v.1.1.2`;
+  const text = `최초 발행 2025-12-07, 업데이트 ${today}, 현재 버전 v.1.2.0`;
+  const versionMain = el("version-text-main");
+  if (versionMain) versionMain.textContent = text;
 }
 
 function wireActions() {
@@ -795,15 +1139,27 @@ function wireActions() {
     showView("gallery");
   });
   const authToggle = el("auth-toggle");
-  authToggle.addEventListener("click", () => {
+  authToggle.addEventListener("click", async () => {
     if (state.canEdit) {
+      state.adminToken = null;
+      sessionStorage.removeItem("dashboard-admin-token");
       setEditMode(false);
       return;
     }
     const val = prompt("편집 모드 암호를 입력하세요.");
-    const can = val === "0690";
-    setEditMode(can);
-    if (!can) alert("암호가 올바르지 않습니다. 뷰어 권한으로 전환됩니다.");
+    if (!val) return;
+    const token = val.trim();
+    try {
+      await fetchJSON("/auth/verify", { headers: { "X-Admin-Token": token } });
+      state.adminToken = token;
+      sessionStorage.setItem("dashboard-admin-token", token);
+      setEditMode(true);
+    } catch {
+      state.adminToken = null;
+      sessionStorage.removeItem("dashboard-admin-token");
+      setEditMode(false);
+      alert("암호가 올바르지 않습니다. 뷰어 권한으로 전환됩니다.");
+    }
   });
 
   el("btn-end-game").addEventListener("click", async () => {
@@ -889,6 +1245,60 @@ function wireActions() {
     posFilter.value = "";
     applyFilters();
   });
+
+  const editToggle = el("task-edit-toggle");
+  const saveBtn = el("task-edit-save");
+  const cancelBtn = el("task-edit-cancel");
+  if (editToggle) {
+    editToggle.addEventListener("click", () => {
+      if (!state.canEdit || !state.tasks) {
+        alert("편집 권한이 없습니다.");
+        return;
+      }
+      state.taskEdit = true;
+      state.taskDraft = {
+        daily_tasks: [...(state.tasks.daily_tasks || [])],
+        weekly_tasks: [...(state.tasks.weekly_tasks || [])],
+        monthly_tasks: [...(state.tasks.monthly_tasks || [])],
+        daily_rewards: (state.tasks.daily_rewards || []).map((row) => row.map((r) => ({ ...r }))),
+        weekly_rewards: (state.tasks.weekly_rewards || []).map((row) => row.map((r) => ({ ...r }))),
+        monthly_rewards: (state.tasks.monthly_rewards || []).map((row) => row.map((r) => ({ ...r }))),
+      };
+      renderTasks();
+    });
+  }
+  if (cancelBtn) {
+    cancelBtn.addEventListener("click", () => {
+      state.taskEdit = false;
+      state.taskDraft = null;
+      renderTasks();
+    });
+  }
+  if (saveBtn) {
+    saveBtn.addEventListener("click", async () => {
+      if (!state.canEdit || !state.taskDraft || !state.selected) return;
+      try {
+        const updated = await fetchJSON(`/games/${state.selected.id}/tasks/update`, {
+          method: "POST",
+          body: JSON.stringify({
+            daily_tasks: state.taskDraft.daily_tasks,
+            weekly_tasks: state.taskDraft.weekly_tasks,
+            monthly_tasks: state.taskDraft.monthly_tasks,
+            daily_rewards: state.taskDraft.daily_rewards,
+            weekly_rewards: state.taskDraft.weekly_rewards,
+            monthly_rewards: state.taskDraft.monthly_rewards,
+          }),
+        });
+        state.tasks = updated;
+        state.taskEdit = false;
+        state.taskDraft = null;
+        renderTasks();
+      } catch (err) {
+        alert("숙제 편집 저장에 실패했습니다.");
+        console.error(err);
+      }
+    });
+  }
 }
 
 async function init() {
@@ -897,10 +1307,9 @@ async function init() {
       console.error("SW register failed", err);
     });
   }
-  restoreAuth();
+  await restoreAuth();
   wireActions();
-  await loadAlerts();
-  await loadGames();
+  await Promise.all([loadAlerts(), loadGames()]);
   renderVersion();
   applyEditState();
 }
@@ -929,14 +1338,24 @@ function showView(view) {
 
 function setEditMode(canEdit) {
   state.canEdit = canEdit;
-  localStorage.setItem("dashboard-can-edit", canEdit ? "1" : "0");
   applyEditState();
 }
 
-function restoreAuth() {
-  const stored = localStorage.getItem("dashboard-can-edit") === "1";
-  state.canEdit = stored;
-  applyEditState();
+async function restoreAuth() {
+  const token = sessionStorage.getItem("dashboard-admin-token");
+  if (!token) {
+    setEditMode(false);
+    return;
+  }
+  state.adminToken = token;
+  try {
+    await fetchJSON("/auth/verify", { headers: { "X-Admin-Token": token } });
+    setEditMode(true);
+  } catch {
+    state.adminToken = null;
+    sessionStorage.removeItem("dashboard-admin-token");
+    setEditMode(false);
+  }
 }
 
 function applyEditState() {

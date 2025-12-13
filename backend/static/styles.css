@@ -154,6 +154,26 @@ a:hover { text-decoration: underline; }
   gap: 8px;
 }
 
+.task-badges {
+  margin-top: 6px;
+  display: flex;
+  gap: 4px;
+}
+.task-badges .badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: #e5e7eb;
+  color: #4b5563;
+}
+.task-badges .badge.done { background: #dcfce7; color: #15803d; }
+.task-badges .badge.pending { background: #f3f4f6; color: #9ca3af; }
+
 .pill {
   display: inline-flex;
   padding: 4px 8px;
@@ -254,6 +274,23 @@ a:hover { text-decoration: underline; }
   gap: 8px;
   margin: 4px 0;
 }
+.task-list.indented { margin-top: 6px; padding-left: 10px; }
+.task-list.collapsed { display: none; }
+.task-parent-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 6px 0 2px;
+}
+.task-master {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+}
+.caret-btn { color: #374151; border-color: #e5e7eb; }
+.caret-btn.active { color: #0a7cff; border-color: #0a7cff; }
 .task-list input[type="checkbox"] { width: 16px; height: 16px; }
 .task-hint {
   margin: 0 0 6px;
@@ -261,6 +298,11 @@ a:hover { text-decoration: underline; }
   color: #2563eb;
   font-weight: 600;
 }
+.reward-list { margin: 4px 0 8px 4px; display: flex; flex-direction: column; gap: 6px; }
+.reward-row select { min-width: 120px; }
+.reward-row input { max-width: 100px; }
+.task-actions { gap: 6px; }
+.task-actions .hidden { display: none; }
 .memo-box textarea {
   width: 100%;
   box-sizing: border-box;

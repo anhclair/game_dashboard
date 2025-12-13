@@ -65,11 +65,23 @@
           <div class="section hidden" id="task-section">
             <div class="section-header">
               <h3>숙제 관리</h3>
+              <div class="row compact task-actions">
+                <button id="task-edit-toggle" class="ghost small-btn hidden">편집하기</button>
+                <button id="task-edit-save" class="small-btn hidden">저장</button>
+                <button id="task-edit-cancel" class="ghost small-btn hidden">취소</button>
+              </div>
             </div>
             <div class="task-block hidden" id="task-daily">
               <p class="task-hint" id="task-daily-hint"></p>
               <p class="task-title">오늘의 숙제는 다 하셨나요?</p>
-              <div class="task-list" id="task-daily-list"></div>
+              <div class="task-parent-row">
+                <label class="task-master">
+                  <input type="checkbox" id="task-daily-master">
+                  <span>햇슴</span>
+                </label>
+                <button type="button" class="ghost small-btn caret-btn" id="task-daily-toggle" aria-expanded="true">접기</button>
+              </div>
+              <div class="task-list indented" id="task-daily-list"></div>
             </div>
             <div class="task-block hidden" id="task-weekly">
               <p class="task-hint" id="task-weekly-hint"></p>
@@ -104,24 +116,41 @@
             <div id="currency-list" class="list"></div>
           </div>
 
-          <div class="section">
-            <div class="section-header">
-              <h3>이벤트</h3>
-            </div>
-            <form id="event-form" class="stack">
-              <div class="row">
-                <input required name="title" placeholder="이벤트명">
-                <input required name="type" placeholder="분류(업데이트/스토리/픽업)">
+            <div class="section">
+              <div class="section-header">
+                <h3>이벤트</h3>
               </div>
-              <div class="row">
-                <input required type="date" name="start_date">
-                <input type="date" name="end_date">
-                <input required name="priority" placeholder="중요도">
-              </div>
-              <div class="row space-between">
-                <button type="submit" id="event-submit-btn">이벤트 추가</button>
-                <button type="button" id="event-reset-btn" class="ghost small-btn">폼 초기화</button>
-              </div>
+              <form id="event-form" class="stack">
+                <div class="row">
+                  <input required name="title" placeholder="이벤트명">
+                  <select required name="type" id="event-type">
+                    <option value="">분류 선택</option>
+                    <option value="업데이트">업데이트</option>
+                    <option value="스토리">스토리</option>
+                    <option value="픽업">픽업</option>
+                    <option value="컨텐츠">컨텐츠</option>
+                    <option value="파밍">파밍</option>
+                    <option value="시즌">시즌</option>
+                    <option value="주년">주년</option>
+                    <option value="페이백">페이백</option>
+                  </select>
+                </div>
+                <div class="row">
+                  <input required type="date" name="start_date">
+                  <input type="date" name="end_date">
+                  <select required name="priority" id="event-priority">
+                    <option value="">중요도 선택</option>
+                    <option value="매우낮음">매우낮음</option>
+                    <option value="낮음">낮음</option>
+                    <option value="중간">중간</option>
+                    <option value="높음">높음</option>
+                    <option value="매우높음">매우높음</option>
+                  </select>
+                </div>
+                <div class="row space-between">
+                  <button type="submit" id="event-submit-btn">이벤트 추가</button>
+                  <button type="button" id="event-reset-btn" class="ghost small-btn">폼 초기화</button>
+                </div>
             </form>
             <div id="event-list" class="list"></div>
           </div>
@@ -139,10 +168,10 @@
             </div>
             <div id="character-list" class="list"></div>
           </div>
-          <p class="version-text" id="version-text"></p>
         </div>
       </section>
     </main>
+    <p class="version-text" id="version-text-main"></p>
   </div>
 
   <template id="game-card-template">
@@ -154,6 +183,11 @@
           <h4 class="card-title"></h4>
         </div>
         <p class="pill small"></p>
+        <div class="task-badges hidden">
+          <span class="badge" data-type="daily">일</span>
+          <span class="badge" data-type="weekly">주</span>
+          <span class="badge" data-type="monthly">월</span>
+        </div>
       </div>
     </article>
   </template>
